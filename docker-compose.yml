@@ -1,0 +1,39 @@
+services:
+
+  # ─── PostgreSQL database ──────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: schema-vault-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: schema_vault_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d schema_vault_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ─── Spring Boot backend ──────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: schema-vault-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  postgres_data:
+

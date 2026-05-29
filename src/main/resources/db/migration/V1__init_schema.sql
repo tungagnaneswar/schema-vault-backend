@@ -1,0 +1,45 @@
+CREATE TABLE roles (
+    id SERIAL PRIMARY KEY,
+    name VARCHAR(50) UNIQUE NOT NULL
+);
+
+INSERT INTO roles (name) VALUES 
+    ('SUPER_ADMIN'), 
+    ('ADMIN'),
+    ('DEVOPS_ADMIN'), 
+    ('DEVELOPER'), 
+    ('VIEWER');
+
+CREATE TABLE users (
+    id BIGSERIAL PRIMARY KEY,
+    email VARCHAR(255) UNIQUE NOT NULL,
+    password VARCHAR(255) NOT NULL,
+    role_id INTEGER NOT NULL REFERENCES roles(id),
+    is_active BOOLEAN NOT NULL DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE db_connections (
+    id BIGSERIAL PRIMARY KEY,
+    name VARCHAR(100) NOT NULL,
+    host VARCHAR(255) NOT NULL,
+    port INTEGER NOT NULL DEFAULT 5432,
+    database_name VARCHAR(100) NOT NULL,
+    username VARCHAR(100) NOT NULL,
+    encrypted_password TEXT NOT NULL,
+    environment VARCHAR(50) NOT NULL,
+    created_by BIGINT NOT NULL REFERENCES users(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE audit_logs (
+    id BIGSERIAL PRIMARY KEY,
+    user_id BIGINT REFERENCES users(id),
+    action VARCHAR(100) NOT NULL,
+    ip_address VARCHAR(45),
+    device_info VARCHAR(255),
+    timestamp TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+    details TEXT
+);
