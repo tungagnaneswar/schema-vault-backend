@@ -5,6 +5,10 @@ spring:
   flyway:
     validate-on-migrate: false
 
+  allow:
+    cors:
+      origin: ${ALLOW_CORS_ORIGIN:http://localhost:5173}
+
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/schema_vault_db}
     username: ${SPRING_DATASOURCE_USERNAME:postgres}

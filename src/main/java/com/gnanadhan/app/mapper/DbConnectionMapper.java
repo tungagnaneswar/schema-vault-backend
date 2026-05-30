@@ -23,5 +23,8 @@ public interface DbConnectionMapper {
     @Mapping(target = "createdAt", ignore = true)
     @Mapping(target = "updatedAt", ignore = true)
     @Mapping(target = "isDeleted", ignore = true)
+    @Mapping(target = "engine", ignore = true)
+    @Mapping(target = "includedSchemas", ignore = true)
+    @Mapping(target = "excludedTables", ignore = true)
     DbConnection toEntity(DbConnectionRequest request);
 }
