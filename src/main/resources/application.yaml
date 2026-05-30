@@ -6,15 +6,15 @@ spring:
     validate-on-migrate: false
 
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/schema_vault_db}
-    username: ${SPRING_DATASOURCE_USERNAME:postgres}
-    password: ${SPRING_DATASOURCE_PASSWORD:postgres}
-    driver-class-name: org.postgresql.Driver
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: ${SPRING_DRIVER_CLASS_NAME}
 
 app:
   jwt:
-    secret: ${APP_JWT_SECRET:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08}
-    expiration-ms: ${APP_JWT_EXPIRATION_MS:86400000}
-    refresh-expiration-ms: ${APP_JWT_REFRESH_EXPIRATION_MS:604800000}
+    secret: ${APP_JWT_SECRET}
+    expiration-ms: ${APP_JWT_EXPIRATION_MS}
+    refresh-expiration-ms: ${APP_JWT_REFRESH_EXPIRATION_MS}
   encryption:
-    key: ${APP_ENCRYPTION_KEY:12345678901234567890123456789012}
+    key: ${APP_ENCRYPTION_KEY}
