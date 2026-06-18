@@ -13,7 +13,7 @@ import com.gnanadhan.app.repository.ProjectRepository;
 import com.gnanadhan.app.repository.TeamDbConnectionRepository;
 import com.gnanadhan.app.repository.TeamMemberRepository;
 import com.gnanadhan.app.repository.UserRepository;
-import com.gnanadhan.app.util.EncryptionUtil;
+import com.gnanadhan.app.service.security.SecretManager;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.context.SecurityContextHolder;
@@ -35,7 +35,7 @@ public class DbConnectionService {
     private final TeamDbConnectionRepository teamDbConnectionRepository;
     private final TeamMemberRepository teamMemberRepository;
     private final UserRepository userRepository;
-    private final EncryptionUtil encryptionUtil;
+    private final SecretManager secretManager;
     private final DbConnectionMapper mapper;
 
     public DbConnectionResponse createConnection(DbConnectionRequest request) {
@@ -51,7 +51,7 @@ public class DbConnectionService {
         }
 
         DbConnection entity = mapper.toEntity(request);
-        entity.setEncryptedPassword(encryptionUtil.encrypt(request.getPassword()));
+        entity.setEncryptedPassword(secretManager.encrypt(request.getPassword()));
         entity.setCreatedBy(user);
         entity.setProject(project);
 
@@ -129,10 +129,10 @@ public class DbConnectionService {
         // Update password only if a new one is provided
         if (request.getPassword() != null && !request.getPassword().isBlank()) {
             testConnection(request.getHost(), request.getPort(), request.getDatabaseName(), request.getUsername(), request.getPassword());
-            existing.setEncryptedPassword(encryptionUtil.encrypt(request.getPassword()));
+            existing.setEncryptedPassword(secretManager.encrypt(request.getPassword()));
         } else {
             // Test with existing decrypted password
-            String plainPassword = encryptionUtil.decrypt(existing.getEncryptedPassword());
+            String plainPassword = secretManager.decrypt(existing.getEncryptedPassword());
             testConnection(existing.getHost(), existing.getPort(), existing.getDatabaseName(), existing.getUsername(), plainPassword);
         }
 
@@ -161,7 +161,7 @@ public class DbConnectionService {
     public void testSavedConnection(Long id) {
         DbConnection connection = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Connection not found"));
-        String plainPassword = encryptionUtil.decrypt(connection.getEncryptedPassword());
+        String plainPassword = secretManager.decrypt(connection.getEncryptedPassword());
         testConnection(connection.getHost(), connection.getPort(), connection.getDatabaseName(), connection.getUsername(), plainPassword);
     }
 

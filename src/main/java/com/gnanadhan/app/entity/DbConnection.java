@@ -44,6 +44,16 @@ public class DbConnection {
     private String encryptedPassword;
 
     @Column(nullable = false, length = 50)
+    @Builder.Default
+    private String engine = "POSTGRES";
+
+    @Column(name = "included_schemas", columnDefinition = "TEXT")
+    private String includedSchemas;
+
+    @Column(name = "excluded_tables", columnDefinition = "TEXT")
+    private String excludedTables;
+
+    @Column(nullable = false, length = 50)
     private String environment; // DEV, QA, UAT, PROD
 
     @ManyToOne(fetch = FetchType.LAZY)

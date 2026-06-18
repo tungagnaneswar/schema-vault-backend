@@ -1,60 +1,53 @@
 package com.gnanadhan.app.controller;
 
-import com.gnanadhan.app.dto.diff.CompareRequest;
-import com.gnanadhan.app.dto.diff.SchemaDiffResponse;
-import com.gnanadhan.app.dto.schema.SchemaModel;
-import com.gnanadhan.app.entity.DbConnection;
-import com.gnanadhan.app.exception.ResourceNotFoundException;
-import com.gnanadhan.app.repository.DbConnectionRepository;
-import com.gnanadhan.app.service.SchemaComparisonService;
-import com.gnanadhan.app.service.SchemaExtractionService;
-import com.gnanadhan.app.util.EncryptionUtil;
+import com.gnanadhan.app.dto.JobCompareRequest;
+import com.gnanadhan.app.dto.CompareJobResponse;
+import com.gnanadhan.app.entity.CompareJob;
+import com.gnanadhan.app.service.CompareJobService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.domain.Page;
 import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.*;
 
 @RestController
-@RequestMapping("/api/compare")
+@RequestMapping("/api/compare/jobs")
 @RequiredArgsConstructor
 public class CompareController {
 
-    private final DbConnectionRepository dbConnectionRepository;
-    private final SchemaExtractionService extractionService;
-    private final SchemaComparisonService comparisonService;
-    private final EncryptionUtil encryptionUtil;
+    private final CompareJobService compareJobService;
 
     @PostMapping
-    public ResponseEntity<SchemaDiffResponse> compare(@Valid @RequestBody CompareRequest request) {
-        DbConnection sourceConn = dbConnectionRepository.findById(request.getSourceConnectionId())
-                .orElseThrow(() -> new ResourceNotFoundException("Source connection not found"));
-        
-        DbConnection targetConn = dbConnectionRepository.findById(request.getTargetConnectionId())
-                .orElseThrow(() -> new ResourceNotFoundException("Target connection not found"));
+    public ResponseEntity<CompareJobResponse> createJob(@Valid @RequestBody JobCompareRequest request) {
+        CompareJob job = compareJobService.startJob(request.getSourceSnapshotId(), request.getTargetSnapshotId());
+        compareJobService.processJob(job.getId()); // async call
+        return ResponseEntity.accepted().body(mapToResponse(job));
+    }
 
-        SchemaModel sourceSchema = extractionService.extractSchema(
-                sourceConn.getHost(),
-                sourceConn.getPort(),
-                sourceConn.getDatabaseName(),
-                sourceConn.getUsername(),
-                encryptionUtil.decrypt(sourceConn.getEncryptedPassword())
-        );
+    @GetMapping
+    public ResponseEntity<Page<CompareJobResponse>> getJobs(
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "10") int size) {
+        Page<CompareJob> jobs = compareJobService.getAllJobs(page, size);
+        return ResponseEntity.ok(jobs.map(this::mapToResponse));
+    }
 
-        SchemaModel targetSchema = extractionService.extractSchema(
-                targetConn.getHost(),
-                targetConn.getPort(),
-                targetConn.getDatabaseName(),
-                targetConn.getUsername(),
-                encryptionUtil.decrypt(targetConn.getEncryptedPassword())
-        );
+    @GetMapping("/{id}")
+    public ResponseEntity<CompareJobResponse> getJobById(@PathVariable Long id) {
+        CompareJob job = compareJobService.getJobById(id);
+        return ResponseEntity.ok(mapToResponse(job));
+    }
 
-        SchemaDiffResponse diffResponse = comparisonService.compareSchemas(
-                sourceSchema, targetSchema, sourceConn.getEnvironment(), targetConn.getEnvironment()
-        );
-
-        return ResponseEntity.ok(diffResponse);
+    private CompareJobResponse mapToResponse(CompareJob job) {
+        return CompareJobResponse.builder()
+                .id(job.getId())
+                .status(job.getStatus())
+                .sourceSnapshotId(job.getSourceSnapshot().getId())
+                .targetSnapshotId(job.getTargetSnapshot().getId())
+                .startedAt(job.getStartedAt())
+                .completedAt(job.getCompletedAt())
+                .errorMessage(job.getErrorMessage())
+                .resultData("COMPLETED".equals(job.getStatus()) ? job.getResultData() : null)
+                .build();
     }
 }

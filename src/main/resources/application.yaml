@@ -5,16 +5,20 @@ spring:
   flyway:
     validate-on-migrate: false
 
+  allow:
+    cors:
+      origin: ${ALLOW_CORS_ORIGIN:http://localhost:5173}
+
   datasource:
-    url: ${SPRING_DATASOURCE_URL}
-    username: ${SPRING_DATASOURCE_USERNAME}
-    password: ${SPRING_DATASOURCE_PASSWORD}
-    driver-class-name: ${SPRING_DRIVER_CLASS_NAME}
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://pg-257835b2-tungaeswar12-a902.a.aivencloud.com:13286/schema_vault_db?sslmode=require}
+    username: ${SPRING_DATASOURCE_USERNAME:avnadmin}
+    password: ${SPRING_DATASOURCE_PASSWORD:AVNS_RS4eTbjiq7iIrY2djmC}
+    driver-class-name: ${SPRING_DRIVER_CLASS_NAME:org.postgresql.Driver}
 
 app:
   jwt:
-    secret: ${APP_JWT_SECRET}
-    expiration-ms: ${APP_JWT_EXPIRATION_MS}
-    refresh-expiration-ms: ${APP_JWT_REFRESH_EXPIRATION_MS}
+    secret: ${APP_JWT_SECRET:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08}
+    expiration-ms: ${APP_JWT_EXPIRATION_MS:86400000}
+    refresh-expiration-ms: ${APP_JWT_REFRESH_EXPIRATION_MS:604800000}
   encryption:
-    key: ${APP_ENCRYPTION_KEY}
+    key: ${APP_ENCRYPTION_KEY:12345678901234567890123456789012}

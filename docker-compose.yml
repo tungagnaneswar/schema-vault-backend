@@ -1,6 +1,6 @@
 services:
 
-  # ─── Spring Boot backend ──────────────────────────────────────
+  # Spring Boot backend
   backend:
     build:
       context: .

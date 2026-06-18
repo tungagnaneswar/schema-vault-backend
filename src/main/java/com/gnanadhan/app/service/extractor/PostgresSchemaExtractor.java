@@ -1,27 +1,39 @@
-package com.gnanadhan.app.service;
+package com.gnanadhan.app.service.extractor;
 
 import com.gnanadhan.app.dto.schema.*;
+import com.gnanadhan.app.entity.DbConnection;
 import org.springframework.stereotype.Service;
 
 import java.sql.*;
 import java.util.*;
 
 @Service
-public class SchemaExtractionService {
+public class PostgresSchemaExtractor implements SchemaExtractor {
 
-    public SchemaModel extractSchema(String host, int port, String database, String username, String password) {
-        String url = String.format("jdbc:postgresql://%s:%d/%s", host, port, database);
+    @Override
+    public boolean supports(String engine) {
+        return "POSTGRES".equalsIgnoreCase(engine);
+    }
 
-        try (Connection conn = DriverManager.getConnection(url, username, password)) {
-            List<TableModel> tables = extractTables(conn);
-            List<FunctionModel> functions = extractFunctions(conn);
-            List<ProcedureModel> procedures = extractProcedures(conn);
-            List<SequenceModel> sequences = extractSequences(conn);
-            List<TypeModel> types = extractTypes(conn);
-            List<ViewModel> views = extractViews(conn);
+    @Override
+    public SchemaModel extract(DbConnection connection, String decryptedPassword) {
+        String url = String.format("jdbc:postgresql://%s:%d/%s", 
+            connection.getHost(), connection.getPort(), connection.getDatabaseName());
+
+        try (Connection conn = DriverManager.getConnection(url, connection.getUsername(), decryptedPassword)) {
+            
+            String schemaFilter = buildSchemaFilter(connection.getIncludedSchemas());
+            String tableFilter = buildTableFilter(connection.getExcludedTables(), "table_name");
+
+            List<TableModel> tables = extractTables(conn, schemaFilter, tableFilter);
+            List<FunctionModel> functions = extractFunctions(conn, schemaFilter);
+            List<ProcedureModel> procedures = extractProcedures(conn, schemaFilter);
+            List<SequenceModel> sequences = extractSequences(conn, schemaFilter);
+            List<TypeModel> types = extractTypes(conn, schemaFilter);
+            List<ViewModel> views = extractViews(conn, schemaFilter, tableFilter);
 
             return SchemaModel.builder()
-                    .databaseName(database)
+                    .databaseName(connection.getDatabaseName())
                     .tables(tables)
                     .functions(functions)
                     .procedures(procedures)
@@ -31,25 +43,54 @@ public class SchemaExtractionService {
                     .build();
 
         } catch (Exception e) {
-            throw new RuntimeException("Error extracting schema for " + database, e);
+            throw new RuntimeException("Error extracting schema for " + connection.getDatabaseName(), e);
         }
+    }
+
+    private String buildSchemaFilter(String includedSchemas) {
+        if (includedSchemas == null || includedSchemas.trim().isEmpty()) {
+            return " = 'public'";
+        }
+        String[] schemas = includedSchemas.split(",");
+        StringBuilder sb = new StringBuilder(" IN (");
+        for (int i = 0; i < schemas.length; i++) {
+            sb.append("'").append(schemas[i].trim()).append("'");
+            if (i < schemas.length - 1) sb.append(", ");
+        }
+        sb.append(")");
+        return sb.toString();
+    }
+
+    private String buildTableFilter(String excludedTables, String columnAlias) {
+        if (excludedTables == null || excludedTables.trim().isEmpty()) {
+            return "";
+        }
+        String[] tables = excludedTables.split(",");
+        StringBuilder sb = new StringBuilder(" AND ").append(columnAlias).append(" NOT IN (");
+        for (int i = 0; i < tables.length; i++) {
+            sb.append("'").append(tables[i].trim()).append("'");
+            if (i < tables.length - 1) sb.append(", ");
+        }
+        sb.append(")");
+        return sb.toString();
     }
 
     // ─── Tables ───────────────────────────────────────────────────────────────
 
-    private List<TableModel> extractTables(Connection conn) throws SQLException {
+    private List<TableModel> extractTables(Connection conn, String schemaFilter, String tableFilter) throws SQLException {
         List<TableModel> tables = new ArrayList<>();
 
-        Map<String, List<ColumnModel>> allColumns = extractAllColumns(conn);
-        Map<String, List<String>> allPrimaryKeys = extractAllPrimaryKeys(conn);
-        Map<String, List<ConstraintModel>> allConstraints = extractAllConstraints(conn);
-        Map<String, List<ForeignKeyModel>> allForeignKeys = extractAllForeignKeys(conn);
-        Map<String, List<IndexModel>> allIndexes = extractAllIndexes(conn);
-        Map<String, List<TriggerModel>> allTriggers = extractAllTriggers(conn);
+        Map<String, List<ColumnModel>> allColumns = extractAllColumns(conn, schemaFilter);
+        Map<String, List<String>> allPrimaryKeys = extractAllPrimaryKeys(conn, schemaFilter);
+        Map<String, List<ConstraintModel>> allConstraints = extractAllConstraints(conn, schemaFilter);
+        Map<String, List<ForeignKeyModel>> allForeignKeys = extractAllForeignKeys(conn, schemaFilter);
+        Map<String, List<IndexModel>> allIndexes = extractAllIndexes(conn, schemaFilter);
+        Map<String, List<TriggerModel>> allTriggers = extractAllTriggers(conn, schemaFilter);
 
         String sql = "SELECT table_name FROM information_schema.tables " +
-                     "WHERE table_schema = 'public' AND table_type = 'BASE TABLE' " +
-                     "ORDER BY table_name";
+                     "WHERE table_schema " + schemaFilter + " AND table_type = 'BASE TABLE' " +
+                     tableFilter +
+                     " ORDER BY table_name";
 
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
@@ -72,13 +113,13 @@ public class SchemaExtractionService {
 
     // ─── Columns ──────────────────────────────────────────────────────────────
 
-    private Map<String, List<ColumnModel>> extractAllColumns(Connection conn) throws SQLException {
+    private Map<String, List<ColumnModel>> extractAllColumns(Connection conn, String schemaFilter) throws SQLException {
         Map<String, List<ColumnModel>> map = new HashMap<>();
 
         String sql = "SELECT table_name, column_name, data_type, is_nullable, column_default, " +
                      "ordinal_position, character_maximum_length, numeric_precision, numeric_scale " +
                      "FROM information_schema.columns " +
-                     "WHERE table_schema = 'public' " +
+                     "WHERE table_schema " + schemaFilter + " " +
                      "ORDER BY table_name, ordinal_position";
 
         try (Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(sql)) {
@@ -102,7 +143,7 @@ public class SchemaExtractionService {
 
     // ─── Primary Keys ─────────────────────────────────────────────────────────
 
-    private Map<String, List<String>> extractAllPrimaryKeys(Connection conn) throws SQLException {
+    private Map<String, List<String>> extractAllPrimaryKeys(Connection conn, String schemaFilter) throws SQLException {
         Map<String, List<String>> map = new HashMap<>();
 
         String sql = "SELECT tc.table_name, kcu.column_name " +
@@ -110,7 +151,7 @@ public class SchemaExtractionService {
                      "JOIN information_schema.key_column_usage kcu " +
                      "  ON tc.constraint_name = kcu.constraint_name " +
                      "  AND tc.table_schema = kcu.table_schema " +
-                     "WHERE tc.table_schema = 'public' " +
+                     "WHERE tc.table_schema " + schemaFilter + " " +
                      "  AND tc.constraint_type = 'PRIMARY KEY' " +
                      "ORDER BY tc.table_name, kcu.ordinal_position";
 
@@ -126,7 +167,7 @@ public class SchemaExtractionService {
 
     // ─── Constraints (CHECK, UNIQUE, EXCLUDE) ─────────────────────────────────
 
-    private Map<String, List<ConstraintModel>> extractAllConstraints(Connection conn) throws SQLException {
+    private Map<String, List<ConstraintModel>> extractAllConstraints(Connection conn, String schemaFilter) throws SQLException {
         Map<String, List<ConstraintModel>> map = new HashMap<>();
 
         // CHECK constraints
@@ -135,7 +176,7 @@ public class SchemaExtractionService {
                           "JOIN information_schema.check_constraints cc " +
                           "  ON tc.constraint_name = cc.constraint_name " +
                           "  AND tc.constraint_schema = cc.constraint_schema " +
-                          "WHERE tc.table_schema = 'public' " +
+                          "WHERE tc.table_schema " + schemaFilter + " " +
                           "  AND tc.constraint_type = 'CHECK' " +
                           "ORDER BY tc.table_name, tc.constraint_name";
 
@@ -156,7 +197,7 @@ public class SchemaExtractionService {
                            "JOIN information_schema.key_column_usage kcu " +
                            "  ON tc.constraint_name = kcu.constraint_name " +
                            "  AND tc.table_schema = kcu.table_schema " +
-                           "WHERE tc.table_schema = 'public' " +
+                           "WHERE tc.table_schema " + schemaFilter + " " +
                            "  AND tc.constraint_type = 'UNIQUE' " +
                            "GROUP BY tc.table_name, tc.constraint_name " +
                            "ORDER BY tc.table_name, tc.constraint_name";
@@ -177,7 +218,7 @@ public class SchemaExtractionService {
                             "FROM pg_catalog.pg_constraint con " +
                             "JOIN pg_catalog.pg_class rel ON rel.oid = con.conrelid " +
                             "JOIN pg_catalog.pg_namespace nsp ON nsp.oid = rel.relnamespace " +
-                            "WHERE nsp.nspname = 'public' " +
+                            "WHERE nsp.nspname " + schemaFilter + " " +
                             "  AND con.contype = 'x' " +
                             "ORDER BY rel.relname, con.conname";
 
@@ -196,7 +237,7 @@ public class SchemaExtractionService {
 
     // ─── Foreign Keys ─────────────────────────────────────────────────────────
 
-    private Map<String, List<ForeignKeyModel>> extractAllForeignKeys(Connection conn) throws SQLException {
+    private Map<String, List<ForeignKeyModel>> extractAllForeignKeys(Connection conn, String schemaFilter) throws SQLException {
         Map<String, List<ForeignKeyModel>> map = new HashMap<>();
 
         String sql = "SELECT tc.table_name, tc.constraint_name, " +
@@ -214,7 +255,7 @@ public class SchemaExtractionService {
                      "JOIN information_schema.referential_constraints rc " +
                      "  ON tc.constraint_name = rc.constraint_name " +
                      "  AND tc.table_schema = rc.constraint_schema " +
-                     "WHERE tc.table_schema = 'public' " +
+                     "WHERE tc.table_schema " + schemaFilter + " " +
                      "  AND tc.constraint_type = 'FOREIGN KEY' " +
                      "GROUP BY tc.table_name, tc.constraint_name, ccu.table_name, rc.update_rule, rc.delete_rule " +
                      "ORDER BY tc.table_name, tc.constraint_name";
@@ -237,10 +278,9 @@ public class SchemaExtractionService {
 
     // ─── Indexes ──────────────────────────────────────────────────────────────
 
-    private Map<String, List<IndexModel>> extractAllIndexes(Connection conn) throws SQLException {
+    private Map<String, List<IndexModel>> extractAllIndexes(Connection conn, String schemaFilter) throws SQLException {
         Map<String, List<IndexModel>> map = new HashMap<>();
 
-        // Use pg_indexes for full definition, join with pg_index for uniqueness and pg_am for index type
         String sql = "SELECT i.tablename AS table_name, i.indexname, i.indexdef, " +
                      "  ix.indisunique, am.amname AS index_type, " +
                      "  string_agg(a.attname, ', ' ORDER BY array_position(ix.indkey, a.attnum)) AS columns " +
@@ -249,8 +289,7 @@ public class SchemaExtractionService {
                      "JOIN pg_index ix ON ix.indexrelid = c.oid " +
                      "JOIN pg_am am ON am.oid = c.relam " +
                      "JOIN pg_attribute a ON a.attrelid = ix.indrelid AND a.attnum = ANY(ix.indkey) " +
-                     "WHERE i.schemaname = 'public' " +
-                     // Exclude indexes backing PK and UNIQUE constraints (they are covered elsewhere)
+                     "WHERE i.schemaname " + schemaFilter + " " +
                      "  AND NOT EXISTS (" +
                      "    SELECT 1 FROM pg_constraint con " +
                      "    WHERE con.conindid = c.oid AND con.contype IN ('p', 'u')" +
@@ -275,14 +314,14 @@ public class SchemaExtractionService {
 
     // ─── Triggers ─────────────────────────────────────────────────────────────
 
-    private Map<String, List<TriggerModel>> extractAllTriggers(Connection conn) throws SQLException {
+    private Map<String, List<TriggerModel>> extractAllTriggers(Connection conn, String schemaFilter) throws SQLException {
         Map<String, List<TriggerModel>> map = new HashMap<>();
 
         String sql = "SELECT event_object_table AS table_name, trigger_name, " +
                      "  string_agg(DISTINCT event_manipulation, ', ' ORDER BY event_manipulation) AS event, " +
                      "  action_timing, action_statement " +
                      "FROM information_schema.triggers " +
-                     "WHERE trigger_schema = 'public' " +
+                     "WHERE trigger_schema " + schemaFilter + " " +
                      "GROUP BY event_object_table, trigger_name, action_timing, action_statement " +
                      "ORDER BY event_object_table, trigger_name";
 
@@ -302,7 +341,7 @@ public class SchemaExtractionService {
 
     // ─── Functions ────────────────────────────────────────────────────────────
 
-    private List<FunctionModel> extractFunctions(Connection conn) throws SQLException {
+    private List<FunctionModel> extractFunctions(Connection conn, String schemaFilter) throws SQLException {
         List<FunctionModel> functions = new ArrayList<>();
 
         String sql = "SELECT p.proname AS name, " +
@@ -313,7 +352,7 @@ public class SchemaExtractionService {
                      "FROM pg_proc p " +
                      "JOIN pg_namespace n ON n.oid = p.pronamespace " +
                      "JOIN pg_language l ON l.oid = p.prolang " +
-                     "WHERE n.nspname = 'public' AND p.prokind = 'f' " +
+                     "WHERE n.nspname " + schemaFilter + " AND p.prokind = 'f' " +
                      "ORDER BY p.proname";
 
         try (Statement stmt = conn.createStatement();
@@ -334,7 +373,7 @@ public class SchemaExtractionService {
 
     // ─── Procedures ───────────────────────────────────────────────────────────
 
-    private List<ProcedureModel> extractProcedures(Connection conn) throws SQLException {
+    private List<ProcedureModel> extractProcedures(Connection conn, String schemaFilter) throws SQLException {
         List<ProcedureModel> procedures = new ArrayList<>();
 
         String sql = "SELECT p.proname AS name, " +
@@ -344,7 +383,7 @@ public class SchemaExtractionService {
                      "FROM pg_proc p " +
                      "JOIN pg_namespace n ON n.oid = p.pronamespace " +
                      "JOIN pg_language l ON l.oid = p.prolang " +
-                     "WHERE n.nspname = 'public' AND p.prokind = 'p' " +
+                     "WHERE n.nspname " + schemaFilter + " AND p.prokind = 'p' " +
                      "ORDER BY p.proname";
 
         try (Statement stmt = conn.createStatement();
@@ -364,13 +403,13 @@ public class SchemaExtractionService {
 
     // ─── Sequences ────────────────────────────────────────────────────────────
 
-    private List<SequenceModel> extractSequences(Connection conn) throws SQLException {
+    private List<SequenceModel> extractSequences(Connection conn, String schemaFilter) throws SQLException {
         List<SequenceModel> sequences = new ArrayList<>();
 
         String sql = "SELECT sequence_name, data_type, start_value, increment, " +
                      "  minimum_value, maximum_value, cycle_option " +
                      "FROM information_schema.sequences " +
-                     "WHERE sequence_schema = 'public' " +
+                     "WHERE sequence_schema " + schemaFilter + " " +
                      "ORDER BY sequence_name";
 
         try (Statement stmt = conn.createStatement();
@@ -393,7 +432,7 @@ public class SchemaExtractionService {
 
     // ─── Types ────────────────────────────────────────────────────────────────
 
-    private List<TypeModel> extractTypes(Connection conn) throws SQLException {
+    private List<TypeModel> extractTypes(Connection conn, String schemaFilter) throws SQLException {
         List<TypeModel> types = new ArrayList<>();
 
         String sql = "SELECT n.nspname as schema, t.typname as name, " +
@@ -412,7 +451,7 @@ public class SchemaExtractionService {
                      "   FROM pg_catalog.pg_enum e WHERE e.enumtypid = t.oid) as enum_values " +
                      "FROM pg_catalog.pg_type t " +
                      "JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace " +
-                     "WHERE n.nspname = 'public' " +
+                     "WHERE n.nspname " + schemaFilter + " " +
                      "  AND t.typtype IN ('e', 'c', 'd') " + // ENUM, COMPOSITE, DOMAIN
                      "ORDER BY t.typname";
 
@@ -442,13 +481,14 @@ public class SchemaExtractionService {
 
     // ─── Views ────────────────────────────────────────────────────────────────
 
-    private List<ViewModel> extractViews(Connection conn) throws SQLException {
+    private List<ViewModel> extractViews(Connection conn, String schemaFilter, String tableFilter) throws SQLException {
         List<ViewModel> views = new ArrayList<>();
 
         String sql = "SELECT table_name, view_definition " +
                      "FROM information_schema.views " +
-                     "WHERE table_schema = 'public' " +
-                     "ORDER BY table_name";
+                     "WHERE table_schema " + schemaFilter + " " +
+                     tableFilter +
+                     " ORDER BY table_name";
 
         try (Statement stmt = conn.createStatement();
              ResultSet rs = stmt.executeQuery(sql)) {
