@@ -6,7 +6,7 @@ services:
       context: .
       dockerfile: Dockerfile
     container_name: schema-vault-backend
-    restart: unless-stopped
+    restart: always
     ports:
       - "8080:8080"
     env_file:

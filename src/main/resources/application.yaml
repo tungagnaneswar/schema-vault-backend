@@ -15,10 +15,28 @@ spring:
     password: ${SPRING_DATASOURCE_PASSWORD:AVNS_RS4eTbjiq7iIrY2djmC}
     driver-class-name: ${SPRING_DRIVER_CLASS_NAME:org.postgresql.Driver}
 
+  mail:
+    host: ${MAIL_HOST:smtp.gmail.com}
+    port: ${MAIL_PORT:587}
+    username: ${MAIL_USERNAME:tungagnaneswar12@gmail.com}
+    password: ${MAIL_PASSWORD:epcuttyklambhciu}
+    properties:
+      mail:
+        smtp:
+          auth: true
+          starttls:
+            enable: true
+            required: true
+          connectiontimeout: 5000
+          timeout: 5000
+          writetimeout: 5000
+          ssl:
+            protocols: TLSv1.2
+
 app:
   jwt:
-    secret: ${APP_JWT_SECRET:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08}
+    secret: ${APP_JWT_SECRET}
     expiration-ms: ${APP_JWT_EXPIRATION_MS:86400000}
     refresh-expiration-ms: ${APP_JWT_REFRESH_EXPIRATION_MS:604800000}
   encryption:
-    key: ${APP_ENCRYPTION_KEY:12345678901234567890123456789012}
+    key: ${APP_ENCRYPTION_KEY}
