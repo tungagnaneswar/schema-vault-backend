@@ -11,9 +11,9 @@ spring:
     swagger-ui:
       enabled: false
       
-  allow:
-    cors:
-      origin: ${ALLOW_CORS_ORIGIN:http://localhost:5173}
+allow:
+  cors:
+    origin: ${ALLOW_CORS_ORIGIN:http://localhost:5173}
 
   datasource:
     url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://pg-257835b2-tungaeswar12-a902.a.aivencloud.com:13286/schema_vault_db?sslmode=require}
