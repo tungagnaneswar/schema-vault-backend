@@ -5,6 +5,12 @@ spring:
   flyway:
     validate-on-migrate: false
 
+  springdoc:
+    api-docs:
+      enabled: false
+    swagger-ui:
+      enabled: false
+      
   allow:
     cors:
       origin: ${ALLOW_CORS_ORIGIN:http://localhost:5173}
