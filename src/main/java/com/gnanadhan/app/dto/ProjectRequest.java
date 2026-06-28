@@ -9,4 +9,6 @@ public class ProjectRequest {
     private String name;
     
     private String description;
+
+    private boolean createDefaultEnvironments;
 }

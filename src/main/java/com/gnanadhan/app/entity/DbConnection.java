@@ -43,9 +43,10 @@ public class DbConnection {
     @Column(name = "encrypted_password", nullable = false, columnDefinition = "TEXT")
     private String encryptedPassword;
 
+    @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 50)
     @Builder.Default
-    private String engine = "POSTGRES";
+    private DatabaseEngine engine = DatabaseEngine.POSTGRES;
 
     @Column(name = "included_schemas", columnDefinition = "TEXT")
     private String includedSchemas;
@@ -53,16 +54,13 @@ public class DbConnection {
     @Column(name = "excluded_tables", columnDefinition = "TEXT")
     private String excludedTables;
 
-    @Column(nullable = false, length = 50)
-    private String environment; // DEV, QA, UAT, PROD
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "environment_id", nullable = false)
+    private Environment environment;
 
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "created_by", nullable = false)
     private User createdBy;
-
-    @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "project_id", nullable = false)
-    private Project project;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

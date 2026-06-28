@@ -3,25 +3,30 @@ package com.gnanadhan.app.service;
 import com.gnanadhan.app.dto.DbConnectionRequest;
 import com.gnanadhan.app.dto.DbConnectionResponse;
 import com.gnanadhan.app.dto.DbConnectionUpdateRequest;
+import com.gnanadhan.app.entity.DatabaseEngine;
 import com.gnanadhan.app.entity.DbConnection;
 import com.gnanadhan.app.entity.TeamDbConnection;
 import com.gnanadhan.app.entity.User;
 import com.gnanadhan.app.exception.ResourceNotFoundException;
 import com.gnanadhan.app.mapper.DbConnectionMapper;
 import com.gnanadhan.app.repository.DbConnectionRepository;
-import com.gnanadhan.app.repository.ProjectRepository;
+import com.gnanadhan.app.repository.EnvironmentRepository;
+import com.gnanadhan.app.entity.Environment;
+import com.gnanadhan.app.entity.Project;
 import com.gnanadhan.app.repository.TeamDbConnectionRepository;
 import com.gnanadhan.app.repository.TeamMemberRepository;
 import com.gnanadhan.app.repository.UserRepository;
 import com.gnanadhan.app.service.security.SecretManager;
+import com.gnanadhan.app.service.security.CurrentUserService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.security.core.context.SecurityContextHolder;
-import org.springframework.stereotype.Service;
 import org.springframework.security.access.AccessDeniedException;
+import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
-import java.sql.Connection;
-import java.sql.DriverManager;
+
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -31,20 +36,22 @@ import java.util.stream.Collectors;
 public class DbConnectionService {
 
     private final DbConnectionRepository repository;
-    private final ProjectRepository projectRepository;
+    private final EnvironmentRepository environmentRepository;
     private final TeamDbConnectionRepository teamDbConnectionRepository;
     private final TeamMemberRepository teamMemberRepository;
     private final UserRepository userRepository;
+    private final CurrentUserService currentUserService;
+    private final ConnectionTestingService connectionTestingService;
     private final SecretManager secretManager;
     private final DbConnectionMapper mapper;
 
+    @Transactional
     public DbConnectionResponse createConnection(DbConnectionRequest request) {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = currentUserService.getCurrentUser();
 
-        var project = projectRepository.findById(request.getProjectId())
-                .orElseThrow(() -> new ResourceNotFoundException("Project not found"));
+        Environment env = environmentRepository.findById(request.getEnvironmentId())
+                .orElseThrow(() -> new ResourceNotFoundException("Environment not found"));
+        Project project = env.getProject();
 
         if (!user.getRole().getName().equals("SUPER_ADMIN") && !project.getCreatedBy().getId().equals(user.getId())) {
             throw new AccessDeniedException("You do not have permission to create a connection in this project");
@@ -53,48 +60,45 @@ public class DbConnectionService {
         DbConnection entity = mapper.toEntity(request);
         entity.setEncryptedPassword(secretManager.encrypt(request.getPassword()));
         entity.setCreatedBy(user);
-        entity.setProject(project);
+        entity.setEnvironment(env);
 
         // Test connection before saving
-        testConnection(request.getHost(), request.getPort(), request.getDatabaseName(), request.getUsername(), request.getPassword());
+        connectionTestingService.testConnection(request.getEngine(), request.getHost(), request.getPort(), request.getDatabaseName(), request.getUsername(), request.getPassword());
 
         DbConnection saved = repository.save(entity);
+        log.info("User {} created database connection '{}' (ID: {}) in environment ID: {}", user.getEmail(), saved.getName(), saved.getId(), env.getId());
         return mapper.toResponse(saved);
     }
 
-    public List<DbConnectionResponse> getAllConnections() {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+    @Transactional(readOnly = true)
+    public Page<DbConnectionResponse> getAllConnections(Pageable pageable) {
+        User user = currentUserService.getCurrentUser();
 
-        List<DbConnection> connections;
+        Page<DbConnection> connections;
         String roleName = user.getRole().getName();
         if (roleName.equals("SUPER_ADMIN")) {
-            connections = repository.findAll();
+            connections = repository.findAll(pageable);
         } else {
-            connections = repository.findAccessibleConnections(user.getId());
+            connections = repository.findAccessibleConnections(user.getId(), pageable);
         }
 
-        return connections.stream()
-                .map(conn -> {
-                    DbConnectionResponse res = mapper.toResponse(conn);
-                    res.setPermissionLevel(determinePermission(conn, user));
-                    return res;
-                })
-                .collect(Collectors.toList());
+        return connections.map(conn -> {
+            DbConnectionResponse res = mapper.toResponse(conn);
+            res.setPermissionLevel(determinePermission(conn, user));
+            return res;
+        });
     }
 
+    @Transactional(readOnly = true)
     public DbConnectionResponse getConnectionById(Long id) {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = currentUserService.getCurrentUser();
 
         DbConnection connection = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Connection not found"));
 
         String roleName = user.getRole().getName();
         if (!roleName.equals("SUPER_ADMIN")) {
-            boolean hasAccess = repository.findAccessibleConnections(user.getId()).stream()
+            boolean hasAccess = repository.findAccessibleConnections(user.getId(), org.springframework.data.domain.Pageable.unpaged()).stream()
                     .anyMatch(c -> c.getId().equals(id));
             if (!hasAccess) {
                 throw new AccessDeniedException("You do not have permission to access this connection");
@@ -106,10 +110,9 @@ public class DbConnectionService {
         return res;
     }
 
+    @Transactional
     public DbConnectionResponse updateConnection(Long id, DbConnectionUpdateRequest request) {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = currentUserService.getCurrentUser();
 
         DbConnection existing = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Connection not found"));
@@ -119,33 +122,38 @@ public class DbConnectionService {
             throw new AccessDeniedException("You do not have permission to update this connection");
         }
 
+        Environment env = environmentRepository.findById(request.getEnvironmentId())
+                .orElseThrow(() -> new ResourceNotFoundException("Environment not found"));
+
         existing.setName(request.getName());
         existing.setHost(request.getHost());
         existing.setPort(request.getPort());
         existing.setDatabaseName(request.getDatabaseName());
         existing.setUsername(request.getUsername());
-        existing.setEnvironment(request.getEnvironment());
+        existing.setEnvironment(env);
+        existing.setEngine(request.getEngine());
 
         // Update password only if a new one is provided
         if (request.getPassword() != null && !request.getPassword().isBlank()) {
-            testConnection(request.getHost(), request.getPort(), request.getDatabaseName(), request.getUsername(), request.getPassword());
+            connectionTestingService.testConnection(request.getEngine(), request.getHost(), request.getPort(), request.getDatabaseName(), request.getUsername(), request.getPassword());
             existing.setEncryptedPassword(secretManager.encrypt(request.getPassword()));
         } else {
             // Test with existing decrypted password
             String plainPassword = secretManager.decrypt(existing.getEncryptedPassword());
-            testConnection(existing.getHost(), existing.getPort(), existing.getDatabaseName(), existing.getUsername(), plainPassword);
+            connectionTestingService.testConnection(existing.getEngine(), existing.getHost(), existing.getPort(), existing.getDatabaseName(), existing.getUsername(), plainPassword);
         }
 
         DbConnection saved = repository.save(existing);
+        log.info("User {} updated database connection '{}' (ID: {})", user.getEmail(), saved.getName(), saved.getId());
+        
         DbConnectionResponse res = mapper.toResponse(saved);
         res.setPermissionLevel(perm);
         return res;
     }
 
+    @Transactional
     public void deleteConnection(Long id) {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = currentUserService.getCurrentUser();
 
         DbConnection connection = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Connection not found"));
@@ -156,28 +164,17 @@ public class DbConnectionService {
         }
 
         repository.deleteById(id);
+        log.info("User {} deleted database connection ID: {}", user.getEmail(), id);
     }
 
+    @Transactional(readOnly = true)
     public void testSavedConnection(Long id) {
         DbConnection connection = repository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Connection not found"));
         String plainPassword = secretManager.decrypt(connection.getEncryptedPassword());
-        testConnection(connection.getHost(), connection.getPort(), connection.getDatabaseName(), connection.getUsername(), plainPassword);
+        connectionTestingService.testConnection(connection.getEngine(), connection.getHost(), connection.getPort(), connection.getDatabaseName(), connection.getUsername(), plainPassword);
     }
 
-    private void testConnection(String host, int port, String database, String username, String password) {
-        String url = String.format("jdbc:postgresql://%s:%d/%s", host, port, database);
-        try (Connection conn = DriverManager.getConnection(url, username, password)) {
-            if (conn.isValid(5)) {
-                log.info("Connection test successful for jdbc:postgresql://{}:{}/{}", host, port, database);
-            } else {
-                throw new RuntimeException("Connection is not valid");
-            }
-        } catch (Exception e) {
-            log.error("Database connection failed", e);
-            throw new RuntimeException("Database connection failed: " + e.getMessage());
-        }
-    }
 
     private String determinePermission(DbConnection connection, User user) {
         if (user.getRole().getName().equals("SUPER_ADMIN") || connection.getCreatedBy().getId().equals(user.getId())) {

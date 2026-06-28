@@ -36,7 +36,13 @@ public class ProjectMapper {
         
         response.setCreatedAt(entity.getCreatedAt());
         response.setUpdatedAt(entity.getUpdatedAt());
-        response.setConnectionCount(entity.getConnections() != null ? entity.getConnections().size() : 0);
+        int connectionCount = 0;
+        if (entity.getEnvironments() != null) {
+            connectionCount = entity.getEnvironments().stream()
+                .mapToInt(e -> e.getConnections() != null ? e.getConnections().size() : 0)
+                .sum();
+        }
+        response.setConnectionCount(connectionCount);
 
         return response;
     }

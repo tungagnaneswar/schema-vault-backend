@@ -2,6 +2,7 @@ package com.gnanadhan.app.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.gnanadhan.app.dto.schema.SchemaModel;
+import com.gnanadhan.app.entity.DatabaseEngine;
 import com.gnanadhan.app.entity.DbConnection;
 import com.gnanadhan.app.entity.SchemaSnapshot;
 import com.gnanadhan.app.repository.DbConnectionRepository;
@@ -48,12 +49,12 @@ class SnapshotServiceTest {
     void createSnapshot_Success() throws Exception {
         DbConnection connection = new DbConnection();
         connection.setId(1L);
-        connection.setEngine("POSTGRES");
+        connection.setEngine(DatabaseEngine.POSTGRES);
         connection.setEncryptedPassword("encrypted");
 
         when(dbConnectionRepository.findById(1L)).thenReturn(Optional.of(connection));
         when(secretManager.decrypt("encrypted")).thenReturn("plain");
-        when(extractorFactory.getExtractor("POSTGRES")).thenReturn(schemaExtractor);
+        when(extractorFactory.getExtractor(DatabaseEngine.POSTGRES)).thenReturn(schemaExtractor);
         
         SchemaModel schemaModel = SchemaModel.builder().databaseName("testdb").build();
         when(schemaExtractor.extract(connection, "plain")).thenReturn(schemaModel);

@@ -8,26 +8,31 @@ import com.gnanadhan.app.exception.ResourceNotFoundException;
 import com.gnanadhan.app.mapper.ProjectMapper;
 import com.gnanadhan.app.repository.ProjectRepository;
 import com.gnanadhan.app.repository.UserRepository;
+import com.gnanadhan.app.entity.Environment;
+import com.gnanadhan.app.service.security.CurrentUserService;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.access.AccessDeniedException;
-import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.Pageable;
 
 import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class ProjectService {
 
     private final ProjectRepository projectRepository;
-    private final UserRepository userRepository;
+    private final CurrentUserService currentUserService;
     private final ProjectMapper projectMapper;
 
+    @Transactional
     public ProjectResponse createProject(ProjectRequest request) {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = currentUserService.getCurrentUser();
 
         if (projectRepository.existsByName(request.getName())) {
             throw new IllegalArgumentException("Project name already exists");
@@ -37,30 +42,37 @@ public class ProjectService {
         project.setCreatedBy(user);
 
         Project savedProject = projectRepository.save(project);
+
+        if (request.isCreateDefaultEnvironments()) {
+            java.util.List<Environment> defaults = new java.util.ArrayList<>(java.util.Arrays.asList(
+                Environment.builder().name("Development").sequence(1).project(savedProject).build(),
+                Environment.builder().name("QA").sequence(2).project(savedProject).build(),
+                Environment.builder().name("Staging").sequence(3).project(savedProject).build(),
+                Environment.builder().name("Production").sequence(4).project(savedProject).build()
+            ));
+            savedProject.setEnvironments(defaults);
+            savedProject = projectRepository.save(savedProject);
+            log.info("User {} created default environments for project ID: {}", user.getEmail(), savedProject.getId());
+        }
+
+        log.info("User {} created project '{}' (ID: {})", user.getEmail(), savedProject.getName(), savedProject.getId());
         return projectMapper.toResponse(savedProject);
     }
 
-    public List<ProjectResponse> getAllProjects() {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+    @Transactional(readOnly = true)
+    public Page<ProjectResponse> getAllProjects(Pageable pageable) {
+        User user = currentUserService.getCurrentUser();
 
-        List<Project> projects;
         if (user.getRole().getName().equals("SUPER_ADMIN")) {
-            projects = projectRepository.findAll();
+            return projectRepository.findAllProjectSummaries(pageable);
         } else {
-            projects = projectRepository.findByCreatedById(user.getId());
+            return projectRepository.findProjectSummariesByUserId(user.getId(), pageable);
         }
-
-        return projects.stream()
-                .map(projectMapper::toResponse)
-                .collect(Collectors.toList());
     }
 
+    @Transactional(readOnly = true)
     public ProjectResponse getProjectById(Long id) {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = currentUserService.getCurrentUser();
 
         Project project = projectRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Project not found"));
@@ -72,10 +84,9 @@ public class ProjectService {
         return projectMapper.toResponse(project);
     }
 
+    @Transactional
     public void deleteProject(Long id) {
-        String username = SecurityContextHolder.getContext().getAuthentication().getName();
-        User user = userRepository.findByEmail(username)
-                .orElseThrow(() -> new ResourceNotFoundException("User not found"));
+        User user = currentUserService.getCurrentUser();
 
         Project project = projectRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Project not found"));
@@ -85,5 +96,15 @@ public class ProjectService {
         }
 
         projectRepository.delete(project);
+        log.info("User {} deleted project ID: {}", user.getEmail(), id);
+    }
+
+    @Transactional(readOnly = true)
+    public void checkProjectAccess(Project project) {
+        User user = currentUserService.getCurrentUser();
+
+        if (!user.getRole().getName().equals("SUPER_ADMIN") && !project.getCreatedBy().getId().equals(user.getId())) {
+            throw new AccessDeniedException("You do not have permission to access this project");
+        }
     }
 }

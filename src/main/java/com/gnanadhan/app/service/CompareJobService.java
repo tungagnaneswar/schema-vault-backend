@@ -56,8 +56,8 @@ public class CompareJobService {
             SchemaDiffResponse diffResponse = comparisonService.compareSchemas(
                     sourceSchema, 
                     targetSchema, 
-                    sourceSnapshot.getConnection().getEnvironment(), 
-                    targetSnapshot.getConnection().getEnvironment()
+                    sourceSnapshot.getConnection().getEnvironment().getName(), 
+                    targetSnapshot.getConnection().getEnvironment().getName()
             );
 
             job.setResultData(objectMapper.writeValueAsString(diffResponse));
