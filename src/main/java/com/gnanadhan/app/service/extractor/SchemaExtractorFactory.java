@@ -1,5 +1,6 @@
 package com.gnanadhan.app.service.extractor;
 
+import com.gnanadhan.app.entity.DatabaseEngine;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -13,10 +14,11 @@ public class SchemaExtractorFactory {
         this.extractors = extractors;
     }
 
-    public SchemaExtractor getExtractor(String engine) {
+    public SchemaExtractor getExtractor(DatabaseEngine engine) {
         return extractors.stream()
                 .filter(e -> e.supports(engine))
                 .findFirst()
                 .orElseThrow(() -> new IllegalArgumentException("Unsupported database engine: " + engine));
     }
 }
+

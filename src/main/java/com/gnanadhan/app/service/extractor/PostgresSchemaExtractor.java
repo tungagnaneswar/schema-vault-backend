@@ -1,6 +1,7 @@
 package com.gnanadhan.app.service.extractor;
 
 import com.gnanadhan.app.dto.schema.*;
+import com.gnanadhan.app.entity.DatabaseEngine;
 import com.gnanadhan.app.entity.DbConnection;
 import org.springframework.stereotype.Service;
 
@@ -11,13 +12,13 @@ import java.util.*;
 public class PostgresSchemaExtractor implements SchemaExtractor {
 
     @Override
-    public boolean supports(String engine) {
-        return "POSTGRES".equalsIgnoreCase(engine);
+    public boolean supports(DatabaseEngine engine) {
+        return engine == DatabaseEngine.POSTGRES;
     }
 
     @Override
     public SchemaModel extract(DbConnection connection, String decryptedPassword) {
-        String url = String.format("jdbc:postgresql://%s:%d/%s", 
+        String url = connection.getEngine().buildJdbcUrl(
             connection.getHost(), connection.getPort(), connection.getDatabaseName());
 
         try (Connection conn = DriverManager.getConnection(url, connection.getUsername(), decryptedPassword)) {

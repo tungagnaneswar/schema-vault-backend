@@ -1,5 +1,6 @@
 package com.gnanadhan.app.dto;
 
+import com.gnanadhan.app.entity.DatabaseEngine;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import lombok.Data;
@@ -24,6 +25,10 @@ public class DbConnectionUpdateRequest {
     // Optional on update - leave blank to keep existing password
     private String password;
 
-    @NotBlank(message = "Environment is required")
-    private String environment;
+    @NotNull(message = "Environment ID is required")
+    private Long environmentId;
+
+    @NotNull(message = "Database engine is required")
+    private DatabaseEngine engine;
 }
+

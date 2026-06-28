@@ -19,7 +19,12 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.Map;
 
@@ -53,6 +58,7 @@ public class AuthController {
     })
     @PostMapping("/login")
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody AuthRequest authRequest) {
+        requireAnonymous();
         return ResponseEntity.ok(authService.login(authRequest));
     }
 
@@ -65,6 +71,7 @@ public class AuthController {
     })
     @PostMapping("/register")
     public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest registerRequest) {
+        requireAnonymous();
         return ResponseEntity.ok(authService.register(registerRequest));
     }
 
@@ -224,5 +231,12 @@ public class AuthController {
 
         authService.resetPassword(request.getResetToken(), request.getNewPassword());
         return ResponseEntity.ok(Map.of("message", "Password has been reset successfully."));
+    }
+
+    private void requireAnonymous() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth != null && auth.isAuthenticated() && !(auth instanceof AnonymousAuthenticationToken)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "User is already authenticated");
+        }
     }
 }
