@@ -10,6 +10,9 @@ spring:
     username: ${SPRING_DATASOURCE_USERNAME:avnadmin}
     password: ${SPRING_DATASOURCE_PASSWORD:AVNS_RS4eTbjiq7iIrY2djmC}
     driver-class-name: ${SPRING_DRIVER_CLASS_NAME:org.postgresql.Driver}
+    hikari:
+      maximum-pool-size: 3
+      minimum-idle: 1
 
   mail:
     host: ${MAIL_HOST:smtp.gmail.com}
