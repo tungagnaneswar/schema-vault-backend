@@ -13,4 +13,5 @@ public interface TeamDbConnectionRepository extends JpaRepository<TeamDbConnecti
     List<TeamDbConnection> findByDbConnectionId(Long dbConnectionId);
     Optional<TeamDbConnection> findByTeamIdAndDbConnectionId(Long teamId, Long dbConnectionId);
     boolean existsByTeamIdAndDbConnectionId(Long teamId, Long dbConnectionId);
+    void deleteByTeamId(Long teamId);
 }

@@ -45,4 +45,26 @@ public class CompareJob {
 
     @Column(name = "error_message", columnDefinition = "TEXT")
     private String errorMessage;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "project_id")
+    private Project project;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "created_by_id")
+    private User createdBy;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "summary_statistics", columnDefinition = "jsonb")
+    private String summaryStatistics;
+
+    @Column(name = "duration_ms")
+    private Long durationMs;
+
+    @Column(name = "reason", columnDefinition = "TEXT")
+    private String reason;
+
+    @JdbcTypeCode(SqlTypes.JSON)
+    @Column(name = "tags", columnDefinition = "jsonb")
+    private String tags;
 }

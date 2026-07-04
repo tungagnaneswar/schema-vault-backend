@@ -176,23 +176,27 @@ public class DbConnectionService {
     }
 
 
-    private String determinePermission(DbConnection connection, User user) {
-        if (user.getRole().getName().equals("SUPER_ADMIN") || connection.getCreatedBy().getId().equals(user.getId())) {
+    public String determinePermission(DbConnection connection, User user) {
+        if (user.getRole().getName().equals("SUPER_ADMIN") || 
+            user.getRole().getName().equals("ADMIN") || 
+            user.getRole().getName().equals("DEVOPS_ADMIN") || 
+            connection.getCreatedBy().getId().equals(user.getId())) {
             return "ADMIN";
         }
+
         List<TeamDbConnection> teamConns = teamDbConnectionRepository.findByDbConnectionId(connection.getId());
         boolean hasWrite = false;
         boolean hasRead = false;
+
         for (TeamDbConnection tc : teamConns) {
             boolean isMember = teamMemberRepository.existsByTeamIdAndUserId(tc.getTeam().getId(), user.getId());
-            if (isMember) {
-                if (tc.getPermissionLevel() != null) {
-                    if (tc.getPermissionLevel().contains("ADMIN")) return "ADMIN";
-                    if (tc.getPermissionLevel().contains("WRITE")) hasWrite = true;
-                    if (tc.getPermissionLevel().contains("READ")) hasRead = true;
-                }
+            if (isMember && tc.getPermissionLevel() != null) {
+                if (tc.getPermissionLevel().contains("ADMIN")) return "ADMIN";
+                if (tc.getPermissionLevel().contains("WRITE")) hasWrite = true;
+                if (tc.getPermissionLevel().contains("READ")) hasRead = true;
             }
         }
+        
         if (hasWrite) return "WRITE";
         if (hasRead) return "READ";
         return "NONE";

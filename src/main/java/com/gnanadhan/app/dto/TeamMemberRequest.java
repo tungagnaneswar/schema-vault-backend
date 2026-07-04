@@ -13,4 +13,6 @@ import lombok.NoArgsConstructor;
 public class TeamMemberRequest {
     @NotNull(message = "User ID is required")
     private Long userId;
+
+    private String teamRole; // Optional, defaults to TEAM_MEMBER in entity
 }
