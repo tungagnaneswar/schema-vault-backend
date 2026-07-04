@@ -2,37 +2,36 @@ package com.gnanadhan.app.entity;
 
 import jakarta.persistence.*;
 import lombok.*;
-import org.hibernate.annotations.SQLDelete;
-import org.hibernate.annotations.Where;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.ZonedDateTime;
 
 @Entity
-@Table(name = "teams")
+@Table(name = "member_project_assignments", uniqueConstraints = {
+        @UniqueConstraint(columnNames = {"team_member_id", "project_id"})
+})
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-@SQLDelete(sql = "UPDATE teams SET is_deleted = true WHERE id=?")
-@Where(clause = "is_deleted=false")
-public class Team {
+public class MemberProjectAssignment {
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Column(unique = true, nullable = false, length = 100)
-    private String name;
-
-    @Column(columnDefinition = "TEXT")
-    private String description;
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "team_member_id", nullable = false)
+    private TeamMember teamMember;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "created_by", nullable = false)
-    private User createdBy;
+    @JoinColumn(name = "project_id", nullable = false)
+    private DbConnection project;
+
+    @Column(name = "permission", nullable = false, length = 50)
+    private String permission; // 'READ', 'WRITE', 'ADMIN'
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
@@ -41,8 +40,4 @@ public class Team {
     @UpdateTimestamp
     @Column(name = "updated_at")
     private ZonedDateTime updatedAt;
-
-    @Column(name = "is_deleted", nullable = false)
-    @Builder.Default
-    private Boolean isDeleted = false;
 }

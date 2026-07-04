@@ -16,6 +16,7 @@ import java.util.stream.Collectors;
 
 
 @RestControllerAdvice
+@lombok.extern.slf4j.Slf4j
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(ResourceNotFoundException.class)
@@ -106,12 +107,49 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
     }
 
+    @ExceptionHandler(org.springframework.dao.DataIntegrityViolationException.class)
+    public ResponseEntity<ErrorResponse> handleDataIntegrityViolationException(org.springframework.dao.DataIntegrityViolationException ex, HttpServletRequest request) {
+        String message = "The operation cannot be completed because the data is already in use or violates a database constraint.";
+        
+        if (ex.getMessage() != null) {
+            String exMsg = ex.getMessage().toLowerCase();
+            if (exMsg.contains("duplicate") || exMsg.contains("unique")) {
+                message = "This record already exists.";
+            } else if (exMsg.contains("foreign key") || exMsg.contains("reference") || exMsg.contains("constraint")) {
+                message = "The operation cannot be completed because the data is already in use.";
+            }
+        }
+        
+        ErrorResponse errorResponse = ErrorResponse.builder()
+                .status(HttpStatus.CONFLICT.value())
+                .message(message)
+                .error("Data Integrity Violation")
+                .timestamp(ZonedDateTime.now())
+                .path(request.getRequestURI())
+                .build();
+        return new ResponseEntity<>(errorResponse, HttpStatus.CONFLICT);
+    }
+
+    @ExceptionHandler(org.springframework.http.converter.HttpMessageNotReadableException.class)
+    public ResponseEntity<ErrorResponse> handleHttpMessageNotReadableException(org.springframework.http.converter.HttpMessageNotReadableException ex, HttpServletRequest request) {
+        ErrorResponse errorResponse = ErrorResponse.builder()
+                .status(HttpStatus.BAD_REQUEST.value())
+                .message("Invalid request payload. Please check the submitted data.")
+                .error("Bad Request")
+                .timestamp(ZonedDateTime.now())
+                .path(request.getRequestURI())
+                .build();
+        return new ResponseEntity<>(errorResponse, HttpStatus.BAD_REQUEST);
+    }
+
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGlobalException(Exception ex, HttpServletRequest request) {
+        log.error("Unhandled exception occurred while accessing path: {}", request.getRequestURI(), ex);
+        
         ErrorResponse errorResponse = ErrorResponse.builder()
                 .status(HttpStatus.INTERNAL_SERVER_ERROR.value())
-                .message("An unexpected error occurred")
-                .error(ex.getMessage()) // Normally we'd sanitize this in production
+                .message("Something went wrong while processing your request. Please try again.")
+                .error("Internal Server Error")
                 .timestamp(ZonedDateTime.now())
                 .path(request.getRequestURI())
                 .build();

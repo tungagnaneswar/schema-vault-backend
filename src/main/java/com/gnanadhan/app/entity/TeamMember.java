@@ -29,6 +29,15 @@ public class TeamMember {
     @JoinColumn(name = "user_id", nullable = false)
     private User user;
 
+    @Enumerated(EnumType.STRING)
+    @Column(name = "team_role", nullable = false, length = 50)
+    @Builder.Default
+    private TeamRole teamRole = TeamRole.TEAM_MEMBER;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "added_by", nullable = true)
+    private User addedBy;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private ZonedDateTime createdAt;

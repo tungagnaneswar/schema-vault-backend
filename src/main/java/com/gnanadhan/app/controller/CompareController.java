@@ -3,6 +3,7 @@ package com.gnanadhan.app.controller;
 import com.gnanadhan.app.dto.JobCompareRequest;
 import com.gnanadhan.app.dto.CompareJobResponse;
 import com.gnanadhan.app.entity.CompareJob;
+import com.gnanadhan.app.entity.Project;
 import com.gnanadhan.app.service.CompareJobService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -19,16 +20,22 @@ public class CompareController {
 
     @PostMapping
     public ResponseEntity<CompareJobResponse> createJob(@Valid @RequestBody JobCompareRequest request) {
-        CompareJob job = compareJobService.startJob(request.getSourceSnapshotId(), request.getTargetSnapshotId());
+        CompareJob job = compareJobService.startJob(request);
         compareJobService.processJob(job.getId()); // async call
         return ResponseEntity.accepted().body(mapToResponse(job));
     }
 
     @GetMapping
     public ResponseEntity<Page<CompareJobResponse>> getJobs(
+            @RequestParam(required = false) Long projectId,
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "10") int size) {
-        Page<CompareJob> jobs = compareJobService.getAllJobs(page, size);
+        Page<CompareJob> jobs;
+        if (projectId != null) {
+            jobs = compareJobService.getJobsByProject(projectId, page, size);
+        } else {
+            jobs = compareJobService.getAllJobs(page, size);
+        }
         return ResponseEntity.ok(jobs.map(this::mapToResponse));
     }
 
@@ -44,9 +51,16 @@ public class CompareController {
                 .status(job.getStatus())
                 .sourceSnapshotId(job.getSourceSnapshot().getId())
                 .targetSnapshotId(job.getTargetSnapshot().getId())
+                .projectId(job.getProject() != null ? job.getProject().getId() : null)
+                .createdById(job.getCreatedBy() != null ? job.getCreatedBy().getId() : null)
+                .createdByEmail(job.getCreatedBy() != null ? job.getCreatedBy().getEmail() : null)
                 .startedAt(job.getStartedAt())
                 .completedAt(job.getCompletedAt())
+                .durationMs(job.getDurationMs())
                 .errorMessage(job.getErrorMessage())
+                .reason(job.getReason())
+                .tags(job.getTags())
+                .summaryStatistics(job.getSummaryStatistics())
                 .resultData("COMPLETED".equals(job.getStatus()) ? job.getResultData() : null)
                 .build();
     }
