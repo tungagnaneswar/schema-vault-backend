@@ -6,19 +6,19 @@ spring:
     validate-on-migrate: false
 
   datasource:
-    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://pg-257835b2-tungaeswar12-a902.a.aivencloud.com:13286/schema_vault_db?sslmode=require}
-    username: ${SPRING_DATASOURCE_USERNAME:avnadmin}
-    password: ${SPRING_DATASOURCE_PASSWORD:AVNS_RS4eTbjiq7iIrY2djmC}
-    driver-class-name: ${SPRING_DRIVER_CLASS_NAME:org.postgresql.Driver}
+    url: ${SPRING_DATASOURCE_URL}
+    username: ${SPRING_DATASOURCE_USERNAME}
+    password: ${SPRING_DATASOURCE_PASSWORD}
+    driver-class-name: ${SPRING_DRIVER_CLASS_NAME}
     hikari:
       maximum-pool-size: 3
       minimum-idle: 1
 
   mail:
-    host: ${MAIL_HOST:smtp.gmail.com}
-    port: ${MAIL_PORT:587}
-    username: ${MAIL_USERNAME:tungagnaneswar12@gmail.com}
-    password: ${MAIL_PASSWORD:epcuttyklambhciu}
+    host: ${MAIL_HOST}
+    port: ${MAIL_PORT}
+    username: ${MAIL_USERNAME}
+    password: ${MAIL_PASSWORD}
     properties:
       mail:
         smtp:
@@ -40,12 +40,12 @@ springdoc:
 
 allow:
   cors:
-    origin: ${ALLOW_CORS_ORIGIN:http://localhost:5173}
+    origin: ${ALLOW_CORS_ORIGIN}
 
 app:
   jwt:
     secret: ${APP_JWT_SECRET}
-    expiration-ms: ${APP_JWT_EXPIRATION_MS:86400000}
-    refresh-expiration-ms: ${APP_JWT_REFRESH_EXPIRATION_MS:604800000}
+    expiration-ms: ${APP_JWT_EXPIRATION_MS}
+    refresh-expiration-ms: ${APP_JWT_REFRESH_EXPIRATION_MS}
   encryption:
     key: ${APP_ENCRYPTION_KEY}
