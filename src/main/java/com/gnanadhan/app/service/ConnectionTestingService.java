@@ -1,6 +1,7 @@
 package com.gnanadhan.app.service;
 
 import com.gnanadhan.app.entity.DatabaseEngine;
+import com.gnanadhan.app.exception.DatabaseConnectionException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -17,11 +18,11 @@ public class ConnectionTestingService {
             if (conn.isValid(5)) {
                 log.info("Connection test successful for {}://{}:{}/{}", engine, host, port, database);
             } else {
-                throw new RuntimeException("Connection is not valid");
+                throw new DatabaseConnectionException("Connection is not valid");
             }
         } catch (Exception e) {
             log.error("Database connection failed", e);
-            throw new RuntimeException("Database connection failed: " + e.getMessage());
+            throw new DatabaseConnectionException("Database connection failed: " + e.getMessage(), e);
         }
     }
 }

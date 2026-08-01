@@ -14,7 +14,6 @@ import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.web.PageableDefault;
 
-import java.util.List;
 import java.util.Map;
 
 @RestController
@@ -25,7 +24,7 @@ public class ProjectController {
     private final ProjectService projectService;
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'DEVOPS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
     public ResponseEntity<ProjectResponse> createProject(@Valid @RequestBody ProjectRequest request) {
         return new ResponseEntity<>(projectService.createProject(request), HttpStatus.CREATED);
     }
@@ -41,7 +40,7 @@ public class ProjectController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'DEVOPS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
     public ResponseEntity<?> deleteProject(@PathVariable Long id) {
         projectService.deleteProject(id);
         return ResponseEntity.ok(Map.of("message", "Project deleted successfully"));

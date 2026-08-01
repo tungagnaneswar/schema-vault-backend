@@ -27,7 +27,9 @@ public class AdminService {
     // ── Users ────────────────────────────────────────────────────────────────
 
     public PageResponse<UserResponse> getAllUsers(int page, int size) {
-        Pageable pageable = PageRequest.of(page, size);
+        int pageNum = Math.max(0, page);
+        int sizeNum = Math.min(Math.max(1, size), 100);
+        Pageable pageable = PageRequest.of(pageNum, sizeNum);
         Page<User> userPage = userRepository.findAllByOrderByCreatedAtDesc(pageable);
 
         List<UserResponse> content = userPage.getContent().stream()
@@ -57,7 +59,9 @@ public class AdminService {
     // ── Audit Logs ───────────────────────────────────────────────────────────
 
     public PageResponse<AuditLogResponse> getAllLogs(int page, int size) {
-        Pageable pageable = PageRequest.of(page, size);
+        int pageNum = Math.max(0, page);
+        int sizeNum = Math.min(Math.max(1, size), 100);
+        Pageable pageable = PageRequest.of(pageNum, sizeNum);
         Page<AuditLog> logPage = auditLogRepository.findAllByOrderByTimestampDesc(pageable);
 
         List<AuditLogResponse> content = logPage.getContent().stream()

@@ -26,13 +26,13 @@ public class DbConnectionController {
     private final DbConnectionService service;
 
     @PostMapping
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'DEVOPS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
     public ResponseEntity<DbConnectionResponse> createConnection(@Valid @RequestBody DbConnectionRequest request) {
         return new ResponseEntity<>(service.createConnection(request), HttpStatus.CREATED);
     }
 
     @PutMapping("/{id}")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'DEVOPS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
     public ResponseEntity<DbConnectionResponse> updateConnection(@PathVariable Long id, @Valid @RequestBody DbConnectionUpdateRequest request) {
         return ResponseEntity.ok(service.updateConnection(id, request));
     }
@@ -48,7 +48,7 @@ public class DbConnectionController {
     }
 
     @DeleteMapping("/{id}")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN', 'DEVOPS_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN', 'ADMIN')")
     public ResponseEntity<?> deleteConnection(@PathVariable Long id) {
         service.deleteConnection(id);
         return ResponseEntity.ok(Map.of("message", "Connection deleted successfully"));

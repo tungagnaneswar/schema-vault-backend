@@ -54,7 +54,7 @@ public class TeamService {
 
     private boolean isGlobalAdmin(User user) {
         String role = user.getRole().getName();
-        return "SUPER_ADMIN".equals(role) || "ADMIN".equals(role) || "DEVOPS_ADMIN".equals(role);
+        return "SUPER_ADMIN".equals(role) || "ADMIN".equals(role);
     }
 
     private void checkManageTeam(Long teamId, User currentUser) {

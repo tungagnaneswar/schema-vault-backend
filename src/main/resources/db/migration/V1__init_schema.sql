@@ -5,10 +5,7 @@ CREATE TABLE roles (
 
 INSERT INTO roles (name) VALUES 
     ('SUPER_ADMIN'), 
-    ('ADMIN'),
-    ('DEVOPS_ADMIN'), 
-    ('DEVELOPER'), 
-    ('VIEWER');
+    ('ADMIN');
 
 CREATE TABLE users (
     id BIGSERIAL PRIMARY KEY,

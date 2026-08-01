@@ -37,6 +37,10 @@ public class JwtTokenProvider {
         return buildToken(username, jwtExpirationMs);
     }
 
+    public String generateRefreshTokenFromUsername(String username) {
+        return buildToken(username, refreshExpirationMs);
+    }
+
     public String generateRefreshToken(Authentication authentication) {
         UserDetails userPrincipal = (UserDetails) authentication.getPrincipal();
         return buildToken(userPrincipal.getUsername(), refreshExpirationMs);

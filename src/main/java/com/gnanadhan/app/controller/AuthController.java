@@ -62,17 +62,30 @@ public class AuthController {
         return ResponseEntity.ok(authService.login(authRequest));
     }
 
-    @Operation(summary = "Register", description = "Create a new account. Returns JWT tokens on success.")
+    @Operation(summary = "Register", description = "Create a new account and send verification OTP.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "OTP sent to email",
+                    content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)),
+            @ApiResponse(responseCode = "400", description = "Email already in use or validation error", content = @Content)
+    })
+    @PostMapping("/register")
+    public ResponseEntity<Map<String, String>> register(@Valid @RequestBody RegisterRequest registerRequest) {
+        requireAnonymous();
+        authService.register(registerRequest);
+        return ResponseEntity.ok(Map.of("message", "Registration initiated. Please check your email for the verification OTP."));
+    }
+
+    @Operation(summary = "Verify Registration", description = "Verify OTP to complete registration. Returns JWT tokens on success.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Registration successful",
                     content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE,
                             schema = @Schema(implementation = AuthResponse.class))),
-            @ApiResponse(responseCode = "400", description = "Email already in use or validation error", content = @Content)
+            @ApiResponse(responseCode = "400", description = "Invalid OTP or already verified", content = @Content)
     })
-    @PostMapping("/register")
-    public ResponseEntity<AuthResponse> register(@Valid @RequestBody RegisterRequest registerRequest) {
+    @PostMapping("/verify-registration")
+    public ResponseEntity<AuthResponse> verifyRegistration(@Valid @RequestBody VerifyOtpRequest verifyRequest) {
         requireAnonymous();
-        return ResponseEntity.ok(authService.register(registerRequest));
+        return ResponseEntity.ok(authService.verifyRegistration(verifyRequest.getEmail(), verifyRequest.getOtp()));
     }
 
     @Operation(summary = "Refresh token", description = "Exchange a valid refresh token for a new access token.")

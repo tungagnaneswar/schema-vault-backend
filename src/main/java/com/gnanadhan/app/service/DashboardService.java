@@ -5,6 +5,7 @@ import com.gnanadhan.app.dto.RecentCompareJobDto;
 import com.gnanadhan.app.entity.User;
 import com.gnanadhan.app.repository.CompareJobRepository;
 import com.gnanadhan.app.repository.DbConnectionRepository;
+import com.gnanadhan.app.repository.TeamRepository;
 import com.gnanadhan.app.repository.UserRepository;
 import com.gnanadhan.app.service.security.CurrentUserService;
 import lombok.RequiredArgsConstructor;
@@ -23,20 +24,23 @@ public class DashboardService {
     private final DbConnectionRepository dbConnectionRepository;
     private final CompareJobRepository compareJobRepository;
     private final UserRepository userRepository;
+    private final TeamRepository teamRepository;
 
     @Transactional(readOnly = true)
     public DashboardResponse getDashboardStats() {
         User user = currentUserService.getCurrentUser();
+        boolean isSuperAdmin = user.getRole().getName().equals("SUPER_ADMIN");
         
         long activeConnections;
-        if (user.getRole().getName().equals("SUPER_ADMIN")) {
+        if (isSuperAdmin) {
             activeConnections = dbConnectionRepository.count();
         } else {
             activeConnections = dbConnectionRepository.findAccessibleConnections(user.getId(), PageRequest.of(0, 1)).getTotalElements();
         }
 
         long schemasCompared = compareJobRepository.count(); // Global count for now
-        long activeUsers = userRepository.count();
+        long activeUsers = isSuperAdmin ? userRepository.count() : 0;
+        long teams = teamRepository.count();
         long systemAlerts = 0; // Static 0 for now as per plan
         
         List<RecentCompareJobDto> recentComparisons = compareJobRepository.findAllByOrderByStartedAtDesc(PageRequest.of(0, 5))
@@ -61,6 +65,7 @@ public class DashboardService {
                 .schemasCompared(schemasCompared)
                 .systemAlerts(systemAlerts)
                 .activeUsers(activeUsers)
+                .teams(teams)
                 .recentComparisons(recentComparisons)
                 .build();
     }

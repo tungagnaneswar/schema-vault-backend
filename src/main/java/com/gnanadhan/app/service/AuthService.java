@@ -4,11 +4,13 @@ import com.gnanadhan.app.dto.AuthRequest;
 import com.gnanadhan.app.dto.AuthResponse;
 import com.gnanadhan.app.dto.RegisterRequest;
 import com.gnanadhan.app.entity.PasswordResetOtp;
+import com.gnanadhan.app.entity.RegistrationOtp;
 import com.gnanadhan.app.entity.Role;
 import com.gnanadhan.app.entity.User;
 import com.gnanadhan.app.exception.OtpException;
 import com.gnanadhan.app.exception.UnauthorizedException;
 import com.gnanadhan.app.repository.PasswordResetOtpRepository;
+import com.gnanadhan.app.repository.RegistrationOtpRepository;
 import com.gnanadhan.app.repository.RoleRepository;
 import com.gnanadhan.app.repository.UserRepository;
 import com.gnanadhan.app.security.JwtTokenProvider;
@@ -61,6 +63,7 @@ public class AuthService {
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
     private final PasswordResetOtpRepository otpRepository;
+    private final RegistrationOtpRepository registrationOtpRepository;
     private final EmailService emailService;
 
     private final SecureRandom secureRandom = new SecureRandom();
@@ -90,27 +93,94 @@ public class AuthService {
                 .build();
     }
 
-    public AuthResponse register(RegisterRequest request) {
-        if (userRepository.existsByEmail(request.getEmail())) {
-            throw new IllegalArgumentException("Email already in use");
+    @Transactional
+    public void register(RegisterRequest request) {
+        Optional<User> existingUserOpt = userRepository.findByEmail(request.getEmail());
+        User user;
+
+        if (existingUserOpt.isPresent()) {
+            user = existingUserOpt.get();
+            if (user.getIsActive()) {
+                throw new IllegalArgumentException("Email already in use");
+            }
+            // User exists but is inactive, proceed to resend OTP
+        } else {
+            Role userRole = roleRepository.findByName("ADMIN")
+                    .orElseThrow(() -> new RuntimeException("Default role not found"));
+
+            user = User.builder()
+                    .email(request.getEmail())
+                    .password(passwordEncoder.encode(request.getPassword()))
+                    .role(userRole)
+                    .isActive(false) // Inactive until OTP is verified
+                    .build();
+
+            userRepository.save(user);
         }
 
-        Role userRole = roleRepository.findByName("ADMIN")
-                .orElseThrow(() -> new RuntimeException("Default role not found"));
+        // Clean up previous registration OTPs
+        registrationOtpRepository.deleteByUser(user);
 
-        User user = User.builder()
-                .email(request.getEmail())
-                .password(passwordEncoder.encode(request.getPassword()))
-                .role(userRole)
-                .isActive(true)
+        String rawOtp = generateSixDigitOtp();
+
+        RegistrationOtp otpRecord = RegistrationOtp.builder()
+                .user(user)
+                .otpHash(passwordEncoder.encode(rawOtp))
+                .expiresAt(ZonedDateTime.now().plusMinutes(OTP_TTL_MINUTES))
                 .build();
 
+        registrationOtpRepository.save(otpRecord);
+        emailService.sendRegistrationOtpEmail(request.getEmail(), rawOtp);
+
+        log.info("Registration OTP generated and email dispatched for user id={}", user.getId());
+    }
+
+    @Transactional
+    public AuthResponse verifyRegistration(String email, String rawOtp) {
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new OtpException("Invalid or expired OTP"));
+
+        if (user.getIsActive()) {
+            throw new IllegalArgumentException("User is already verified");
+        }
+
+        RegistrationOtp otpRecord = registrationOtpRepository
+                .findActiveOtpForUpdateByUser(user, ZonedDateTime.now())
+                .orElseThrow(() -> new OtpException("Invalid or expired OTP"));
+
+        if (otpRecord.getAttemptCount() >= MAX_OTP_ATTEMPTS) {
+            throw new OtpException("Too many failed attempts. Please register again to request a new OTP.");
+        }
+
+        otpRecord.setAttemptCount(otpRecord.getAttemptCount() + 1);
+        registrationOtpRepository.save(otpRecord);
+
+        if (!passwordEncoder.matches(rawOtp, otpRecord.getOtpHash())) {
+            int remaining = MAX_OTP_ATTEMPTS - otpRecord.getAttemptCount();
+            if (remaining <= 0) {
+                throw new OtpException("Too many failed attempts. Please register again to request a new OTP.");
+            }
+            throw new OtpException("Invalid OTP. " + remaining + " attempt(s) remaining.");
+        }
+
+        // OTP is valid
+        otpRecord.setIsUsed(true);
+        registrationOtpRepository.save(otpRecord);
+
+        user.setIsActive(true);
         userRepository.save(user);
 
-        AuthRequest loginRequest = new AuthRequest();
-        loginRequest.setEmail(request.getEmail());
-        loginRequest.setPassword(request.getPassword());
-        return login(loginRequest);
+        log.info("Registration verified successfully for user id={}", user.getId());
+
+        String accessToken = tokenProvider.generateTokenFromUsername(user.getEmail());
+        String refreshToken = tokenProvider.generateRefreshTokenFromUsername(user.getEmail());
+
+        return AuthResponse.builder()
+                .accessToken(accessToken)
+                .refreshToken(refreshToken)
+                .email(user.getEmail())
+                .role(user.getRole().getName())
+                .build();
     }
 
     public AuthResponse refreshToken(String refreshToken) {
