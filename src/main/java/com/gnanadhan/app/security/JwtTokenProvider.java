@@ -1,7 +1,12 @@
 package com.gnanadhan.app.security;
 
-import io.jsonwebtoken.*;
+import io.jsonwebtoken.ExpiredJwtException;
+import io.jsonwebtoken.Jwts;
+import io.jsonwebtoken.MalformedJwtException;
+import io.jsonwebtoken.SignatureAlgorithm;
+import io.jsonwebtoken.UnsupportedJwtException;
 import io.jsonwebtoken.security.Keys;
+import io.jsonwebtoken.security.SecurityException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
@@ -37,20 +42,21 @@ public class JwtTokenProvider {
         return buildToken(username, jwtExpirationMs);
     }
 
-    public String generateRefreshTokenFromUsername(String username) {
-        return buildToken(username, refreshExpirationMs);
-    }
-
     public String generateRefreshToken(Authentication authentication) {
         UserDetails userPrincipal = (UserDetails) authentication.getPrincipal();
         return buildToken(userPrincipal.getUsername(), refreshExpirationMs);
     }
 
+    public String generateRefreshTokenFromUsername(String username) {
+        return buildToken(username, refreshExpirationMs);
+    }
+
     private String buildToken(String subject, int expirationMs) {
+        Date now = new Date();
         return Jwts.builder()
                 .setSubject(subject)
-                .setIssuedAt(new Date())
-                .setExpiration(new Date((new Date()).getTime() + expirationMs))
+                .setIssuedAt(now)
+                .setExpiration(new Date(now.getTime() + expirationMs))
                 .signWith(getSigningKey(), SignatureAlgorithm.HS256)
                 .compact();
     }

@@ -29,32 +29,14 @@ import org.springframework.transaction.annotation.Transactional;
 import java.security.SecureRandom;
 import java.time.ZonedDateTime;
 import java.util.Optional;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
 @Slf4j
 public class AuthService {
 
-    // -------------------------------------------------------------------------
-    // Constants
-    // -------------------------------------------------------------------------
-
-    /** Number of minutes before an OTP expires after creation. */
     private static final int OTP_TTL_MINUTES = 10;
-
-    /** Maximum consecutive failed OTP attempts before the record is locked. */
     private static final int MAX_OTP_ATTEMPTS = 5;
-
-    /**
-     * Minimum gap (in seconds) between OTP generation requests for the same user.
-     * Prevents email flooding without leaking whether the email exists.
-     */
-    private static final int RATE_LIMIT_SECONDS = 60;
-
-    // -------------------------------------------------------------------------
-    // Dependencies
-    // -------------------------------------------------------------------------
 
     private final AuthenticationManager authenticationManager;
     private final JwtTokenProvider tokenProvider;
@@ -68,10 +50,6 @@ public class AuthService {
     private final OtpRateLimiterService otpRateLimiterService;
 
     private final SecureRandom secureRandom = new SecureRandom();
-
-    // =========================================================================
-    // Auth — Login / Register / Refresh
-    // =========================================================================
 
     public AuthResponse login(AuthRequest authRequest) {
         loginRateLimiterService.checkLockout(authRequest.getEmail());
@@ -87,7 +65,6 @@ public class AuthService {
         }
 
         loginRateLimiterService.recordSuccess(authRequest.getEmail());
-
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         String accessToken = tokenProvider.generateToken(authentication);
@@ -96,12 +73,7 @@ public class AuthService {
         User user = userRepository.findByEmail(authRequest.getEmail())
                 .orElseThrow(() -> new UnauthorizedException("User not found"));
 
-        return AuthResponse.builder()
-                .accessToken(accessToken)
-                .refreshToken(refreshToken)
-                .email(user.getEmail())
-                .role(user.getRole().getName())
-                .build();
+        return buildAuthResponse(user, accessToken, refreshToken);
     }
 
     @Transactional
@@ -122,7 +94,6 @@ public class AuthService {
             if (user.getIsActive()) {
                 throw new IllegalArgumentException("Email already in use");
             }
-            // User exists but is inactive, update password hash if changed and proceed to resend OTP
             user.setPassword(passwordEncoder.encode(request.getPassword()));
             userRepository.save(user);
         } else {
@@ -133,7 +104,7 @@ public class AuthService {
                     .email(request.getEmail())
                     .password(passwordEncoder.encode(request.getPassword()))
                     .role(userRole)
-                    .isActive(false) // Inactive until OTP is verified
+                    .isActive(false)
                     .build();
 
             userRepository.save(user);
@@ -170,7 +141,6 @@ public class AuthService {
         Optional<User> userOpt = userRepository.findByEmail(email);
 
         if (userOpt.isEmpty()) {
-            // Anti-enumeration: silent no-op
             log.debug("[IP: {}] Resend registration OTP requested for unknown email (suppressed)", clientIp);
             return;
         }
@@ -237,7 +207,6 @@ public class AuthService {
             throw new OtpException("Invalid OTP. " + remaining + " attempt(s) remaining.");
         }
 
-        // OTP is valid
         otpRecord.setIsUsed(true);
         registrationOtpRepository.save(otpRecord);
 
@@ -250,12 +219,7 @@ public class AuthService {
         String accessToken = tokenProvider.generateTokenFromUsername(user.getEmail());
         String refreshToken = tokenProvider.generateRefreshTokenFromUsername(user.getEmail());
 
-        return AuthResponse.builder()
-                .accessToken(accessToken)
-                .refreshToken(refreshToken)
-                .email(user.getEmail())
-                .role(user.getRole().getName())
-                .build();
+        return buildAuthResponse(user, accessToken, refreshToken);
     }
 
     public AuthResponse refreshToken(String refreshToken) {
@@ -267,12 +231,7 @@ public class AuthService {
 
             String newAccessToken = tokenProvider.generateTokenFromUsername(username);
 
-            return AuthResponse.builder()
-                    .accessToken(newAccessToken)
-                    .refreshToken(refreshToken)
-                    .email(user.getEmail())
-                    .role(user.getRole().getName())
-                    .build();
+            return buildAuthResponse(user, newAccessToken, refreshToken);
         }
         throw new UnauthorizedException("Invalid refresh token");
     }
@@ -284,25 +243,6 @@ public class AuthService {
         }
     }
 
-    // =========================================================================
-    // Forgot Password — Step 1: Request OTP
-    // =========================================================================
-
-    /**
-     * Initiates the forgot-password flow by generating and emailing a 6-digit OTP.
-     *
-     * <p>Security guarantees:
-     * <ul>
-     *   <li>Always returns successfully — callers cannot distinguish between
-     *       an existing email and a non-existent one (no enumeration).</li>
-     *   <li>Rate-limited: if an OTP was already created within the last
-     *       {@value RATE_LIMIT_SECONDS} seconds, this call is a silent no-op.</li>
-     *   <li>The plain OTP value is never written to any log.</li>
-     *   <li>All previous OTP records for the user are purged before creating a new one.</li>
-     * </ul>
-     *
-     * @param email the address to send the OTP to
-     */
     @Transactional
     public void forgotPassword(String email) {
         forgotPassword(email, "UNKNOWN");
@@ -316,45 +256,35 @@ public class AuthService {
         Optional<User> userOpt = userRepository.findByEmail(email);
 
         if (userOpt.isEmpty()) {
-            // Anti-enumeration: silent no-op
             log.debug("[IP: {}] Forgot-password requested for unknown email (suppressed)", clientIp);
             return;
         }
 
         User user = userOpt.get();
 
-        // Enforce 60s cooldown and hourly cap before dispatching email
         try {
             otpRateLimiterService.checkEmailDispatchRateLimit(email, clientIp);
         } catch (OtpException ex) {
             log.info("[IP: {}] Forgot-password rate-limit triggered for email: {}", clientIp, email);
-            return; // Silent no-op to avoid information leakage
+            return;
         }
 
-        // Clean up all previous OTP records for this user.
         otpRepository.deleteByUser(user);
 
-        // Generate a cryptographically secure 6-digit OTP.
         String rawOtp = generateSixDigitOtp();
 
         PasswordResetOtp otpRecord = PasswordResetOtp.builder()
                 .user(user)
-                .otpHash(passwordEncoder.encode(rawOtp)) // store only the hash
+                .otpHash(passwordEncoder.encode(rawOtp))
                 .expiresAt(ZonedDateTime.now().plusMinutes(OTP_TTL_MINUTES))
                 .build();
 
         otpRepository.save(otpRecord);
         otpRateLimiterService.recordEmailDispatch(email, clientIp);
-
-        // Send asynchronously — failure is handled inside EmailService without propagating.
         emailService.sendOtpEmail(email, rawOtp);
 
         log.info("[IP: {}] OTP generated and email dispatched for user id={}", clientIp, user.getId());
     }
-
-    // =========================================================================
-    // Forgot Password — Step 2: Verify OTP
-    // =========================================================================
 
     @Transactional(noRollbackFor = OtpException.class)
     public void verifyOtp(String email, String rawOtp) {
@@ -395,10 +325,6 @@ public class AuthService {
         log.info("[IP: {}] OTP verified successfully for user id={}", clientIp, user.getId());
     }
 
-    // =========================================================================
-    // Forgot Password — Step 3: Reset Password
-    // =========================================================================
-
     @Transactional(noRollbackFor = OtpException.class)
     public void resetPassword(String email, String rawOtp, String newPassword) {
         resetPassword(email, rawOtp, newPassword, "UNKNOWN");
@@ -437,7 +363,6 @@ public class AuthService {
         user.setPassword(passwordEncoder.encode(newPassword));
         userRepository.save(user);
 
-        // Mark as used to prevent any further use of this OTP record.
         otpRecord.setIsUsed(true);
         otpRepository.save(otpRecord);
 
@@ -445,26 +370,15 @@ public class AuthService {
         log.info("[IP: {}] Password reset successfully for user id={}", clientIp, user.getId());
     }
 
-    // =========================================================================
-    // Private helpers
-    // =========================================================================
-
-    /**
-     * Returns {@code true} if an OTP was created for this user within the last
-     * {@value RATE_LIMIT_SECONDS} seconds.
-     */
-    private boolean isRateLimited(User user) {
-        return otpRepository.findTopByUserOrderByCreatedAtDesc(user)
-                .map(last -> last.getCreatedAt() != null
-                        && last.getCreatedAt().isAfter(
-                        ZonedDateTime.now().minusSeconds(RATE_LIMIT_SECONDS)))
-                .orElse(false);
+    private AuthResponse buildAuthResponse(User user, String accessToken, String refreshToken) {
+        return AuthResponse.builder()
+                .accessToken(accessToken)
+                .refreshToken(refreshToken)
+                .email(user.getEmail())
+                .role(user.getRole().getName())
+                .build();
     }
 
-    /**
-     * Generates a cryptographically secure 6-digit numeric OTP.
-     * Uses {@link SecureRandom} to ensure unpredictability.
-     */
     private String generateSixDigitOtp() {
         int otp = 100_000 + secureRandom.nextInt(900_000);
         return String.valueOf(otp);

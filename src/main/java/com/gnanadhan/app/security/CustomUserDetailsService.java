@@ -1,7 +1,7 @@
 package com.gnanadhan.app.security;
 
-import com.gnanadhan.app.entity.User;
 import com.gnanadhan.app.repository.UserRepository;
+import com.gnanadhan.app.entity.User;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;

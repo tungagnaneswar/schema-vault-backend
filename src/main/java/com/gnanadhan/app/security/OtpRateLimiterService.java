@@ -8,18 +8,6 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Service to protect OTP operations (Registration and Forgot Password) against abuse,
- * email flooding, and brute-force attacks.
- *
- * <p>Enforces:
- * <ul>
- *   <li>IP Rate Limiting: max 10 requests/min per IP address.</li>
- *   <li>Per-Email Cooldown: minimum 60 seconds between email dispatches.</li>
- *   <li>Hourly Email Cap: maximum 5 email dispatches per email address per hour.</li>
- *   <li>Short Lockout: 3-minute pause on an email address after 5 failed verification attempts.</li>
- * </ul>
- */
 @Service
 @Slf4j
 public class OtpRateLimiterService {
@@ -27,7 +15,7 @@ public class OtpRateLimiterService {
     public static final int IP_RATE_LIMIT_PER_MINUTE = 10;
     public static final int DISPATCH_COOLDOWN_SECONDS = 60;
     public static final int HOURLY_DISPATCH_CAP = 5;
-    public static final long SHORT_LOCKOUT_DURATION_SECONDS = 3 * 60; // 3 minutes
+    public static final long SHORT_LOCKOUT_DURATION_SECONDS = 3 * 60;
 
     private final Map<String, IpTracker> ipCache = new ConcurrentHashMap<>();
     private final Map<String, EmailDispatchTracker> dispatchCache = new ConcurrentHashMap<>();
@@ -63,9 +51,6 @@ public class OtpRateLimiterService {
         }
     }
 
-    /**
-     * Enforces IP-based rate limiting (max 10 requests/min per IP).
-     */
     public void checkIpRateLimit(String clientIp) {
         if (clientIp == null || clientIp.isBlank() || "UNKNOWN".equalsIgnoreCase(clientIp)) {
             return;
@@ -85,12 +70,9 @@ public class OtpRateLimiterService {
         }
     }
 
-    /**
-     * Enforces a 3-minute pause if the email address is currently locked out.
-     */
     public void checkEmailLockout(String email, String clientIp) {
         if (email == null || email.isBlank()) return;
-        String normalizedEmail = email.toLowerCase().trim();
+        String normalizedEmail = normalize(email);
         LockoutEntry entry = lockoutCache.get(normalizedEmail);
 
         if (entry != null) {
@@ -106,12 +88,9 @@ public class OtpRateLimiterService {
         }
     }
 
-    /**
-     * Enforces 60-second cooldown and hourly email dispatch cap before sending an email.
-     */
     public void checkEmailDispatchRateLimit(String email, String clientIp) {
         if (email == null || email.isBlank()) return;
-        String normalizedEmail = email.toLowerCase().trim();
+        String normalizedEmail = normalize(email);
         long now = Instant.now().getEpochSecond();
 
         EmailDispatchTracker tracker = dispatchCache.get(normalizedEmail);
@@ -131,12 +110,9 @@ public class OtpRateLimiterService {
         }
     }
 
-    /**
-     * Records a successful email dispatch for the given email address.
-     */
     public void recordEmailDispatch(String email, String clientIp) {
         if (email == null || email.isBlank()) return;
-        String normalizedEmail = email.toLowerCase().trim();
+        String normalizedEmail = normalize(email);
         long now = Instant.now().getEpochSecond();
 
         dispatchCache.compute(normalizedEmail, (k, existing) -> {
@@ -150,22 +126,20 @@ public class OtpRateLimiterService {
         log.info("[IP: {}] OTP email dispatched to: {}", clientIp, normalizedEmail);
     }
 
-    /**
-     * Triggers a 3-minute lockout pause on the email address after 5 failed verification attempts.
-     */
     public void triggerShortLockout(String email, String clientIp) {
         if (email == null || email.isBlank()) return;
-        String normalizedEmail = email.toLowerCase().trim();
+        String normalizedEmail = normalize(email);
         long lockoutEnd = Instant.now().getEpochSecond() + SHORT_LOCKOUT_DURATION_SECONDS;
         lockoutCache.put(normalizedEmail, new LockoutEntry(lockoutEnd));
         log.warn("[IP: {}] 3-minute OTP pause triggered for email: {}", clientIp, normalizedEmail);
     }
 
-    /**
-     * Resets the lockout pause upon successful OTP verification.
-     */
     public void resetLockout(String email) {
         if (email == null || email.isBlank()) return;
-        lockoutCache.remove(email.toLowerCase().trim());
+        lockoutCache.remove(normalize(email));
+    }
+
+    private String normalize(String email) {
+        return email.toLowerCase().trim();
     }
 }
