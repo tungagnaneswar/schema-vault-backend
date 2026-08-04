@@ -21,6 +21,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -42,6 +43,12 @@ public class AuthController {
 
     private final AuthService authService;
 
+    @Value("${app.cookie.same-site:Lax}")
+    private String cookieSameSite;
+
+    @Value("${app.cookie.secure:false}")
+    private boolean cookieSecure;
+
     @Operation(summary = "Login")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Login successful", content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE, schema = @Schema(implementation = AuthResponse.class))),
@@ -51,7 +58,7 @@ public class AuthController {
     public ResponseEntity<AuthResponse> login(@Valid @RequestBody AuthRequest authRequest, HttpServletResponse response) {
         requireAnonymous();
         AuthResponse authResponse = authService.login(authRequest);
-        setTokenCookies(response, authResponse.getAccessToken(), authResponse.getRefreshToken());
+        setRefreshTokenCookie(response, authResponse.getRefreshToken());
         return ResponseEntity.ok(authResponse);
     }
 
@@ -79,7 +86,7 @@ public class AuthController {
         requireAnonymous();
         String clientIp = ClientIpUtil.getClientIp(servletRequest);
         AuthResponse authResponse = authService.verifyRegistration(verifyRequest.getEmail(), verifyRequest.getOtp(), clientIp);
-        setTokenCookies(response, authResponse.getAccessToken(), authResponse.getRefreshToken());
+        setRefreshTokenCookie(response, authResponse.getRefreshToken());
         return ResponseEntity.ok(authResponse);
     }
 
@@ -91,7 +98,7 @@ public class AuthController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Refresh token is missing");
         }
         AuthResponse authResponse = authService.refreshToken(token);
-        setTokenCookies(response, authResponse.getAccessToken(), authResponse.getRefreshToken());
+        setRefreshTokenCookie(response, authResponse.getRefreshToken());
         return ResponseEntity.ok(authResponse);
     }
 
@@ -130,23 +137,14 @@ public class AuthController {
         return ResponseEntity.ok(Map.of("message", "Password has been reset successfully."));
     }
 
-    private void setTokenCookies(HttpServletResponse response, String accessToken, String refreshToken) {
-        if (accessToken != null) {
-            ResponseCookie accessCookie = ResponseCookie.from("accessToken", accessToken)
-                    .httpOnly(true)
-                    .path("/")
-                    .maxAge(7 * 24 * 60 * 60)
-                    .sameSite("Lax")
-                    .build();
-            response.addHeader(HttpHeaders.SET_COOKIE, accessCookie.toString());
-        }
-
+    private void setRefreshTokenCookie(HttpServletResponse response, String refreshToken) {
         if (refreshToken != null) {
             ResponseCookie refreshCookie = ResponseCookie.from("refreshToken", refreshToken)
                     .httpOnly(true)
                     .path("/")
                     .maxAge(30 * 24 * 60 * 60)
-                    .sameSite("Lax")
+                    .sameSite(cookieSameSite)
+                    .secure(cookieSecure)
                     .build();
             response.addHeader(HttpHeaders.SET_COOKIE, refreshCookie.toString());
         }
@@ -157,14 +155,16 @@ public class AuthController {
                 .httpOnly(true)
                 .path("/")
                 .maxAge(0)
-                .sameSite("Lax")
+                .sameSite(cookieSameSite)
+                .secure(cookieSecure)
                 .build();
 
         ResponseCookie refreshCookie = ResponseCookie.from("refreshToken", "")
                 .httpOnly(true)
                 .path("/")
                 .maxAge(0)
-                .sameSite("Lax")
+                .sameSite(cookieSameSite)
+                .secure(cookieSecure)
                 .build();
 
         response.addHeader(HttpHeaders.SET_COOKIE, accessCookie.toString());

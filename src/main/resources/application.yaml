@@ -47,5 +47,8 @@ app:
     secret: ${APP_JWT_SECRET}
     expiration-ms: ${APP_JWT_EXPIRATION_MS}
     refresh-expiration-ms: ${APP_JWT_REFRESH_EXPIRATION_MS}
+  cookie:
+    same-site: ${APP_COOKIE_SAME_SITE}
+    secure: ${APP_COOKIE_SECURE}
   encryption:
     key: ${APP_ENCRYPTION_KEY}
