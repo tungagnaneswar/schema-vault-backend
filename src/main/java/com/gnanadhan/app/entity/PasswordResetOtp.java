@@ -39,13 +39,6 @@ public class PasswordResetOtp {
     @Column(name = "otp_hash", nullable = false)
     private String otpHash;
 
-    /**
-     * UUID token issued <em>after</em> successful OTP verification.
-     * Valid for {@code RESET_TOKEN_TTL_MINUTES} minutes.
-     */
-    @Column(name = "reset_token")
-    private String resetToken;
-
     /** True once the password reset has been completed — prevents token reuse. */
     @Column(name = "is_used", nullable = false)
     @Builder.Default
@@ -62,13 +55,6 @@ public class PasswordResetOtp {
     /** Timestamp after which the OTP is no longer valid (set at creation time). */
     @Column(name = "expires_at", nullable = false)
     private ZonedDateTime expiresAt;
-
-    /**
-     * Separate expiry for the reset token (set at OTP-verification time).
-     * Kept distinct from {@code expiresAt} so the two TTLs are independently enforced.
-     */
-    @Column(name = "reset_token_expires_at")
-    private ZonedDateTime resetTokenExpiresAt;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)

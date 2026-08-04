@@ -7,7 +7,6 @@ import com.gnanadhan.app.entity.User;
 import com.gnanadhan.app.exception.ResourceNotFoundException;
 import com.gnanadhan.app.mapper.ProjectMapper;
 import com.gnanadhan.app.repository.ProjectRepository;
-import com.gnanadhan.app.repository.UserRepository;
 import com.gnanadhan.app.entity.Environment;
 import com.gnanadhan.app.service.security.CurrentUserService;
 import lombok.RequiredArgsConstructor;
@@ -17,9 +16,6 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
-
-import java.util.List;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor

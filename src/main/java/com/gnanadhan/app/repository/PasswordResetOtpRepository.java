@@ -47,22 +47,6 @@ public interface PasswordResetOtpRepository extends JpaRepository<PasswordResetO
     Optional<PasswordResetOtp> findActiveOtpForUpdateByUser(User user, ZonedDateTime now);
 
     /**
-     * Retrieves and LOCKS a reset-token record for the password-reset step.
-     *
-     * <p>Pessimistic write lock prevents two concurrent requests using the same reset token
-     * simultaneously — the second will see {@code is_used = true} after the first commits.
-     */
-    @Lock(LockModeType.PESSIMISTIC_WRITE)
-    @QueryHints(@QueryHint(name = "jakarta.persistence.lock.timeout", value = "3000"))
-    @Query("""
-            SELECT o FROM PasswordResetOtp o
-            WHERE o.resetToken = :resetToken
-              AND o.isUsed = false
-              AND o.resetTokenExpiresAt > :now
-            """)
-    Optional<PasswordResetOtp> findActiveResetTokenForUpdate(String resetToken, ZonedDateTime now);
-
-    /**
      * Deletes all OTP records for a user before creating a new one.
      * Keeps the table clean and prevents accumulation of stale rows.
      */

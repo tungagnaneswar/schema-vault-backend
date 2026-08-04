@@ -4,6 +4,7 @@ import com.gnanadhan.app.dto.AuthRequest;
 import com.gnanadhan.app.dto.AuthResponse;
 import com.gnanadhan.app.dto.ForgotPasswordRequest;
 import com.gnanadhan.app.dto.RegisterRequest;
+import com.gnanadhan.app.dto.ResendOtpRequest;
 import com.gnanadhan.app.dto.ResetPasswordRequest;
 import com.gnanadhan.app.dto.TokenRefreshRequest;
 import com.gnanadhan.app.dto.VerifyOtpRequest;
@@ -69,10 +70,25 @@ public class AuthController {
             @ApiResponse(responseCode = "400", description = "Email already in use or validation error", content = @Content)
     })
     @PostMapping("/register")
-    public ResponseEntity<Map<String, String>> register(@Valid @RequestBody RegisterRequest registerRequest) {
+    public ResponseEntity<Map<String, String>> register(@Valid @RequestBody RegisterRequest registerRequest, jakarta.servlet.http.HttpServletRequest servletRequest) {
         requireAnonymous();
-        authService.register(registerRequest);
+        String clientIp = com.gnanadhan.app.util.ClientIpUtil.getClientIp(servletRequest);
+        authService.register(registerRequest, clientIp);
         return ResponseEntity.ok(Map.of("message", "Registration initiated. Please check your email for the verification OTP."));
+    }
+
+    @Operation(summary = "Resend Verification OTP", description = "Resends a registration verification OTP to the given email.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Verification OTP sent if account exists and is unverified",
+                    content = @Content(mediaType = MediaType.APPLICATION_JSON_VALUE)),
+            @ApiResponse(responseCode = "400", description = "Account already verified or rate limit exceeded", content = @Content)
+    })
+    @PostMapping("/resend-verification-otp")
+    public ResponseEntity<Map<String, String>> resendVerificationOtp(@Valid @RequestBody ResendOtpRequest request, jakarta.servlet.http.HttpServletRequest servletRequest) {
+        requireAnonymous();
+        String clientIp = com.gnanadhan.app.util.ClientIpUtil.getClientIp(servletRequest);
+        authService.resendRegistrationOtp(request.getEmail(), clientIp);
+        return ResponseEntity.ok(Map.of("message", "If an unverified account with that email exists, a verification OTP has been sent."));
     }
 
     @Operation(summary = "Verify Registration", description = "Verify OTP to complete registration. Returns JWT tokens on success.")
@@ -83,9 +99,10 @@ public class AuthController {
             @ApiResponse(responseCode = "400", description = "Invalid OTP or already verified", content = @Content)
     })
     @PostMapping("/verify-registration")
-    public ResponseEntity<AuthResponse> verifyRegistration(@Valid @RequestBody VerifyOtpRequest verifyRequest) {
+    public ResponseEntity<AuthResponse> verifyRegistration(@Valid @RequestBody VerifyOtpRequest verifyRequest, jakarta.servlet.http.HttpServletRequest servletRequest) {
         requireAnonymous();
-        return ResponseEntity.ok(authService.verifyRegistration(verifyRequest.getEmail(), verifyRequest.getOtp()));
+        String clientIp = com.gnanadhan.app.util.ClientIpUtil.getClientIp(servletRequest);
+        return ResponseEntity.ok(authService.verifyRegistration(verifyRequest.getEmail(), verifyRequest.getOtp(), clientIp));
     }
 
     @Operation(summary = "Refresh token", description = "Exchange a valid refresh token for a new access token.")
@@ -98,6 +115,18 @@ public class AuthController {
     @PostMapping("/refresh")
     public ResponseEntity<AuthResponse> refreshToken(@Valid @RequestBody TokenRefreshRequest request) {
         return ResponseEntity.ok(authService.refreshToken(request.getRefreshToken()));
+    }
+
+    @Operation(summary = "Logout", description = "Logout user session.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Logout successful", content = @Content)
+    })
+    @PostMapping("/logout")
+    public ResponseEntity<Map<String, String>> logout(@RequestBody(required = false) TokenRefreshRequest request) {
+        if (request != null && request.getRefreshToken() != null) {
+            authService.logout(request.getRefreshToken());
+        }
+        return ResponseEntity.ok(Map.of("message", "Logged out successfully."));
     }
 
     // -------------------------------------------------------------------------
@@ -134,9 +163,11 @@ public class AuthController {
     })
     @PostMapping("/forgot-password")
     public ResponseEntity<Map<String, String>> forgotPassword(
-            @Valid @RequestBody ForgotPasswordRequest request) {
+            @Valid @RequestBody ForgotPasswordRequest request,
+            jakarta.servlet.http.HttpServletRequest servletRequest) {
 
-        authService.forgotPassword(request.getEmail());
+        String clientIp = com.gnanadhan.app.util.ClientIpUtil.getClientIp(servletRequest);
+        authService.forgotPassword(request.getEmail(), clientIp);
         return ResponseEntity.ok(Map.of(
                 "message", "If an account with that email exists, an OTP has been sent."
         ));
@@ -145,24 +176,23 @@ public class AuthController {
     @Operation(
             summary = "Step 2 — Verify OTP",
             description = """
-                    Validates the 6-digit OTP received by email and returns a short-lived **reset token**.
+                    Validates the 6-digit OTP received by email.
 
                     **Security notes:**
-                    - OTP is locked after **5 failed attempts** — request a new one via `/forgot-password`.
-                    - Reset token is valid for **10 minutes** from the time of successful verification.
-                    - The reset token is a UUID and is stored hashed in the database.
+                    - Enforces IP rate-limiting, dispatch cooldown, and a 3-minute lockout pause after 5 wrong attempts.
+                    - OTP is valid for **10 minutes**.
                     """
     )
     @ApiResponses({
             @ApiResponse(
                     responseCode = "200",
-                    description = "OTP verified — reset token returned",
+                    description = "OTP verified successfully",
                     content = @Content(
                             mediaType = MediaType.APPLICATION_JSON_VALUE,
                             examples = @ExampleObject(
                                     value = """
                                             {
-                                              "resetToken": "f3a2b1c0-d4e5-4f6a-b7c8-d9e0f1a2b3c4"
+                                              "message": "OTP verified successfully."
                                             }
                                             """
                             )
@@ -181,7 +211,7 @@ public class AuthController {
                                             { "message": "Invalid or expired OTP", "status": 400 }
                                             """),
                                     @ExampleObject(name = "Locked", value = """
-                                            { "message": "Too many failed attempts. Please request a new OTP.", "status": 400 }
+                                            { "message": "Too many failed attempts. Please wait 3 minutes.", "status": 400 }
                                             """)
                             }
                     )
@@ -189,20 +219,22 @@ public class AuthController {
     })
     @PostMapping("/verify-otp")
     public ResponseEntity<Map<String, String>> verifyOtp(
-            @Valid @RequestBody VerifyOtpRequest request) {
+            @Valid @RequestBody VerifyOtpRequest request,
+            jakarta.servlet.http.HttpServletRequest servletRequest) {
 
-        String resetToken = authService.verifyOtp(request.getEmail(), request.getOtp());
-        return ResponseEntity.ok(Map.of("resetToken", resetToken));
+        String clientIp = com.gnanadhan.app.util.ClientIpUtil.getClientIp(servletRequest);
+        authService.verifyOtp(request.getEmail(), request.getOtp(), clientIp);
+        return ResponseEntity.ok(Map.of("message", "OTP verified successfully."));
     }
 
     @Operation(
             summary = "Step 3 — Reset password",
             description = """
-                    Resets the user's password using the **reset token** obtained from Step 2.
+                    Resets the user's password using the email, OTP, and new password.
 
                     **Security notes:**
-                    - The reset token expires after **10 minutes**.
-                    - Each reset token can only be used **once** — reuse returns HTTP 400.
+                    - OTP is valid for **10 minutes**.
+                    - Each OTP can only be used **once** — reuse returns HTTP 400.
                     - The new password must be at least **8 characters**.
                     - After a successful reset, the user can immediately log in with the new password.
                     """
@@ -224,12 +256,12 @@ public class AuthController {
             ),
             @ApiResponse(
                     responseCode = "400",
-                    description = "Invalid / expired / already-used reset token, or password too short",
+                    description = "Invalid / expired OTP, or password too short",
                     content = @Content(
                             mediaType = MediaType.APPLICATION_JSON_VALUE,
                             examples = {
-                                    @ExampleObject(name = "Invalid token", value = """
-                                            { "message": "Invalid or expired reset token", "status": 400 }
+                                    @ExampleObject(name = "Invalid OTP", value = """
+                                            { "message": "Invalid or expired OTP", "status": 400 }
                                             """),
                                     @ExampleObject(name = "Short password", value = """
                                             { "newPassword": "Password must be at least 8 characters" }
@@ -240,9 +272,11 @@ public class AuthController {
     })
     @PostMapping("/reset-password")
     public ResponseEntity<Map<String, String>> resetPassword(
-            @Valid @RequestBody ResetPasswordRequest request) {
+            @Valid @RequestBody ResetPasswordRequest request,
+            jakarta.servlet.http.HttpServletRequest servletRequest) {
 
-        authService.resetPassword(request.getResetToken(), request.getNewPassword());
+        String clientIp = com.gnanadhan.app.util.ClientIpUtil.getClientIp(servletRequest);
+        authService.resetPassword(request.getEmail(), request.getOtp(), request.getNewPassword(), clientIp);
         return ResponseEntity.ok(Map.of("message", "Password has been reset successfully."));
     }
 

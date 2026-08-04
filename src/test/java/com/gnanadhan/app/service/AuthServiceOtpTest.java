@@ -1,13 +1,18 @@
 package com.gnanadhan.app.service;
 
+import com.gnanadhan.app.dto.RegisterRequest;
 import com.gnanadhan.app.entity.PasswordResetOtp;
+import com.gnanadhan.app.entity.RegistrationOtp;
 import com.gnanadhan.app.entity.Role;
 import com.gnanadhan.app.entity.User;
 import com.gnanadhan.app.exception.OtpException;
 import com.gnanadhan.app.repository.PasswordResetOtpRepository;
+import com.gnanadhan.app.repository.RegistrationOtpRepository;
 import com.gnanadhan.app.repository.RoleRepository;
 import com.gnanadhan.app.repository.UserRepository;
 import com.gnanadhan.app.security.JwtTokenProvider;
+import com.gnanadhan.app.security.LoginRateLimiterService;
+import com.gnanadhan.app.security.OtpRateLimiterService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -17,6 +22,8 @@ import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.crypto.password.PasswordEncoder;
 
 import java.time.ZonedDateTime;
@@ -29,11 +36,11 @@ import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.*;
 
 /**
- * Unit tests for the OTP-based forgot-password flow in {@link AuthService}.
+ * Unit tests for the OTP-based forgot-password and registration flow in {@link AuthService}.
  *
  * <p>All dependencies are mocked with Mockito — no Spring context is loaded.
  */
-@DisplayName("AuthService — OTP Password Reset Flow")
+@DisplayName("AuthService — OTP Password Reset and Registration Flow")
 class AuthServiceOtpTest {
 
     // -------------------------------------------------------------------------
@@ -46,7 +53,10 @@ class AuthServiceOtpTest {
     @Mock private RoleRepository roleRepository;
     @Mock private PasswordEncoder passwordEncoder;
     @Mock private PasswordResetOtpRepository otpRepository;
+    @Mock private RegistrationOtpRepository registrationOtpRepository;
     @Mock private EmailService emailService;
+    @Mock private LoginRateLimiterService loginRateLimiterService;
+    @Mock private OtpRateLimiterService otpRateLimiterService;
 
     @InjectMocks
     private AuthService authService;
@@ -63,7 +73,7 @@ class AuthServiceOtpTest {
         MockitoAnnotations.openMocks(this);
 
         testRole = new Role();
-        testRole.setName("ADMIN");
+        testRole.setName("USER");
 
         testUser = User.builder()
                 .id(1L)
@@ -108,17 +118,11 @@ class AuthServiceOtpTest {
         }
 
         @Test
-        @DisplayName("rate-limited (OTP < 1 min ago) → silent no-op, nothing saved or sent")
+        @DisplayName("within 60s of last request → rate-limited, silent no-op")
         void forgotPassword_rateLimited_silentNoOp() {
-            PasswordResetOtp recentOtp = PasswordResetOtp.builder()
-                    .user(testUser)
-                    .otpHash("$2a$10$hash")
-                    .expiresAt(ZonedDateTime.now().plusMinutes(9))
-                    .createdAt(ZonedDateTime.now().minusSeconds(30)) // 30s ago — within 60s limit
-                    .build();
-
             when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.of(testUser));
-            when(otpRepository.findTopByUserOrderByCreatedAtDesc(testUser)).thenReturn(Optional.of(recentOtp));
+            doThrow(new OtpException("Please wait 60 seconds"))
+                    .when(otpRateLimiterService).checkEmailDispatchRateLimit(eq("user@example.com"), anyString());
 
             authService.forgotPassword("user@example.com");
 
@@ -159,8 +163,8 @@ class AuthServiceOtpTest {
     class VerifyOtpTests {
 
         @Test
-        @DisplayName("valid OTP → returns reset token, saves updated record")
-        void verifyOtp_validOtp_returnsResetToken() {
+        @DisplayName("valid OTP → verifies successfully, saves updated attempt count")
+        void verifyOtp_validOtp_verifiesSuccessfully() {
             PasswordResetOtp otpRecord = buildActiveOtp(0);
 
             when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.of(testUser));
@@ -169,12 +173,9 @@ class AuthServiceOtpTest {
             when(passwordEncoder.matches("123456", "$2a$10$hashedotp")).thenReturn(true);
             when(otpRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            String resetToken = authService.verifyOtp("user@example.com", "123456");
+            authService.verifyOtp("user@example.com", "123456");
 
-            assertThat(resetToken).isNotBlank();
-            assertThat(otpRecord.getResetToken()).isEqualTo(resetToken);
-            assertThat(otpRecord.getResetTokenExpiresAt()).isAfter(ZonedDateTime.now());
-            verify(otpRepository, times(2)).save(otpRecord); // once for attempt, once for token
+            verify(otpRepository).save(otpRecord);
         }
 
         @Test
@@ -252,17 +253,19 @@ class AuthServiceOtpTest {
     class ResetPasswordTests {
 
         @Test
-        @DisplayName("valid reset token → updates password, marks OTP as used")
-        void resetPassword_validToken_updatesPassword() {
-            PasswordResetOtp otpRecord = buildVerifiedOtp("valid-reset-token");
+        @DisplayName("valid email and OTP → updates password, marks OTP as used")
+        void resetPassword_validOtp_updatesPassword() {
+            PasswordResetOtp otpRecord = buildActiveOtp(0);
 
-            when(otpRepository.findActiveResetTokenForUpdate(
-                    eq("valid-reset-token"), any())).thenReturn(Optional.of(otpRecord));
+            when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.of(testUser));
+            when(otpRepository.findActiveOtpForUpdateByUser(
+                    eq(testUser), any())).thenReturn(Optional.of(otpRecord));
+            when(passwordEncoder.matches("123456", "$2a$10$hashedotp")).thenReturn(true);
             when(passwordEncoder.encode("newPassword1")).thenReturn("$2a$10$newhashedpassword");
             when(userRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(otpRepository.save(any())).thenAnswer(inv -> inv.getArgument(0));
 
-            authService.resetPassword("valid-reset-token", "newPassword1");
+            authService.resetPassword("user@example.com", "123456", "newPassword1");
 
             ArgumentCaptor<User> userCaptor = ArgumentCaptor.forClass(User.class);
             verify(userRepository).save(userCaptor.capture());
@@ -272,38 +275,156 @@ class AuthServiceOtpTest {
         }
 
         @Test
-        @DisplayName("used reset token → throws OtpException (repository returns empty)")
-        void resetPassword_usedToken_throwsException() {
-            when(otpRepository.findActiveResetTokenForUpdate(
-                    eq("used-token"), any())).thenReturn(Optional.empty());
+        @DisplayName("expired or missing OTP → throws OtpException")
+        void resetPassword_expiredOtp_throwsException() {
+            when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.of(testUser));
+            when(otpRepository.findActiveOtpForUpdateByUser(
+                    eq(testUser), any())).thenReturn(Optional.empty());
 
-            assertThatThrownBy(() -> authService.resetPassword("used-token", "newPassword1"))
+            assertThatThrownBy(() -> authService.resetPassword("user@example.com", "123456", "newPassword1"))
                     .isInstanceOf(OtpException.class)
-                    .hasMessageContaining("Invalid or expired reset token");
+                    .hasMessageContaining("Invalid or expired OTP");
 
-            verifyNoInteractions(userRepository);
+            verifyNoInteractions(passwordEncoder);
+        }
+    }
+
+    // =========================================================================
+    // Registration & Resend Registration OTP Tests
+    // =========================================================================
+
+    @Nested
+    @DisplayName("resendRegistrationOtp() & register() unverified flow")
+    class RegistrationAndResendOtpTests {
+
+        @Test
+        @DisplayName("re-register unverified user → updates password, deletes old OTP, sends new OTP")
+        void register_unverifiedUser_updatesPasswordAndSendsOtp() {
+            User inactiveUser = User.builder()
+                    .id(2L)
+                    .email("unverified@example.com")
+                    .password("$2a$10$oldpass")
+                    .role(testRole)
+                    .isActive(false)
+                    .build();
+
+            RegisterRequest request = new RegisterRequest();
+            request.setEmail("unverified@example.com");
+            request.setPassword("newSecurePassword123");
+
+            when(userRepository.findByEmail("unverified@example.com")).thenReturn(Optional.of(inactiveUser));
+            when(passwordEncoder.encode(anyString())).thenReturn("$2a$10$hashedotp");
+            when(passwordEncoder.encode("newSecurePassword123")).thenReturn("$2a$10$newpass");
+
+            authService.register(request);
+
+            verify(userRepository).save(inactiveUser);
+            assertThat(inactiveUser.getPassword()).isEqualTo("$2a$10$newpass");
+            verify(registrationOtpRepository).deleteByUser(inactiveUser);
+            verify(registrationOtpRepository).save(any(RegistrationOtp.class));
+            verify(emailService).sendRegistrationOtpEmail(eq("unverified@example.com"), anyString());
         }
 
         @Test
-        @DisplayName("expired reset token → throws OtpException (repository returns empty)")
-        void resetPassword_expiredToken_throwsException() {
-            when(otpRepository.findActiveResetTokenForUpdate(
-                    eq("expired-token"), any())).thenReturn(Optional.empty());
+        @DisplayName("resendRegistrationOtp valid unverified user → deletes old OTPs, saves new OTP, sends email")
+        void resendRegistrationOtp_unverifiedUser_sendsOtp() {
+            User inactiveUser = User.builder()
+                    .id(2L)
+                    .email("unverified@example.com")
+                    .password("$2a$10$pass")
+                    .role(testRole)
+                    .isActive(false)
+                    .build();
 
-            assertThatThrownBy(() -> authService.resetPassword("expired-token", "newPassword1"))
-                    .isInstanceOf(OtpException.class)
-                    .hasMessageContaining("Invalid or expired reset token");
+            when(userRepository.findByEmail("unverified@example.com")).thenReturn(Optional.of(inactiveUser));
+            when(registrationOtpRepository.findTopByUserOrderByCreatedAtDesc(inactiveUser)).thenReturn(Optional.empty());
+            when(passwordEncoder.encode(anyString())).thenReturn("$2a$10$hashedotp");
+
+            authService.resendRegistrationOtp("unverified@example.com");
+
+            verify(registrationOtpRepository).deleteByUser(inactiveUser);
+            verify(registrationOtpRepository).save(any(RegistrationOtp.class));
+            verify(emailService).sendRegistrationOtpEmail(eq("unverified@example.com"), anyString());
         }
 
         @Test
-        @DisplayName("unknown reset token → throws OtpException")
-        void resetPassword_unknownToken_throwsException() {
-            when(otpRepository.findActiveResetTokenForUpdate(
-                    eq("unknown-token"), any())).thenReturn(Optional.empty());
+        @DisplayName("resendRegistrationOtp rate limited (<60s) → throws OtpException")
+        void resendRegistrationOtp_rateLimited_throwsException() {
+            User inactiveUser = User.builder()
+                    .id(2L)
+                    .email("unverified@example.com")
+                    .password("$2a$10$pass")
+                    .role(testRole)
+                    .isActive(false)
+                    .build();
 
-            assertThatThrownBy(() -> authService.resetPassword("unknown-token", "newPassword1"))
+            when(userRepository.findByEmail("unverified@example.com")).thenReturn(Optional.of(inactiveUser));
+            doThrow(new OtpException("Please wait 60 seconds"))
+                    .when(otpRateLimiterService).checkEmailDispatchRateLimit(eq("unverified@example.com"), anyString());
+
+            assertThatThrownBy(() -> authService.resendRegistrationOtp("unverified@example.com"))
                     .isInstanceOf(OtpException.class)
-                    .hasMessageContaining("Invalid or expired reset token");
+                    .hasMessageContaining("Please wait 60 seconds");
+        }
+
+        @Test
+        @DisplayName("resendRegistrationOtp already verified user → throws IllegalArgumentException")
+        void resendRegistrationOtp_alreadyVerified_throwsException() {
+            when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.of(testUser)); // isActive = true
+
+            assertThatThrownBy(() -> authService.resendRegistrationOtp("user@example.com"))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Account is already verified");
+        }
+
+        @Test
+        @DisplayName("resendRegistrationOtp unknown email → silent no-op (anti-enumeration)")
+        void resendRegistrationOtp_unknownEmail_silentNoOp() {
+            when(userRepository.findByEmail("nobody@example.com")).thenReturn(Optional.empty());
+
+            authService.resendRegistrationOtp("nobody@example.com");
+
+            verifyNoInteractions(registrationOtpRepository, emailService);
+        }
+
+        @Test
+        @DisplayName("login calls checkLockout and recordSuccess on successful login")
+        void login_successful_recordsSuccess() {
+            com.gnanadhan.app.dto.AuthRequest authRequest = new com.gnanadhan.app.dto.AuthRequest();
+            authRequest.setEmail("user@example.com");
+            authRequest.setPassword("password123");
+
+            org.springframework.security.core.userdetails.User springUser = new org.springframework.security.core.userdetails.User(
+                    "user@example.com", "password123", java.util.Collections.emptyList()
+            );
+            Authentication auth = new UsernamePasswordAuthenticationToken(springUser, "password123");
+
+            when(authenticationManager.authenticate(any())).thenReturn(auth);
+            when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.of(testUser));
+            when(tokenProvider.generateToken(auth)).thenReturn("accessToken");
+            when(tokenProvider.generateRefreshToken(auth)).thenReturn("refreshToken");
+
+            com.gnanadhan.app.dto.AuthResponse response = authService.login(authRequest);
+
+            assertThat(response).isNotNull();
+            verify(loginRateLimiterService).checkLockout("user@example.com");
+            verify(loginRateLimiterService).recordSuccess("user@example.com");
+        }
+
+        @Test
+        @DisplayName("login failed authentication calls recordFailedAttempt")
+        void login_failed_recordsFailedAttempt() {
+            com.gnanadhan.app.dto.AuthRequest authRequest = new com.gnanadhan.app.dto.AuthRequest();
+            authRequest.setEmail("user@example.com");
+            authRequest.setPassword("wrongpassword");
+
+            when(authenticationManager.authenticate(any())).thenThrow(new com.gnanadhan.app.exception.UnauthorizedException("Bad credentials"));
+
+            assertThatThrownBy(() -> authService.login(authRequest))
+                    .isInstanceOf(com.gnanadhan.app.exception.UnauthorizedException.class);
+
+            verify(loginRateLimiterService).checkLockout("user@example.com");
+            verify(loginRateLimiterService).recordFailedAttempt("user@example.com");
         }
     }
 
@@ -319,19 +440,6 @@ class AuthServiceOtpTest {
                 .isUsed(false)
                 .attemptCount(attemptCount)
                 .expiresAt(ZonedDateTime.now().plusMinutes(9))
-                .build();
-    }
-
-    private PasswordResetOtp buildVerifiedOtp(String resetToken) {
-        return PasswordResetOtp.builder()
-                .id(1L)
-                .user(testUser)
-                .otpHash("$2a$10$hashedotp")
-                .resetToken(resetToken)
-                .isUsed(false)
-                .attemptCount(1)
-                .expiresAt(ZonedDateTime.now().plusMinutes(9))
-                .resetTokenExpiresAt(ZonedDateTime.now().plusMinutes(9))
                 .build();
     }
 }
