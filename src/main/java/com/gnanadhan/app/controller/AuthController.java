@@ -21,8 +21,10 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseCookie;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AnonymousAuthenticationToken;
 import org.springframework.security.core.Authentication;
@@ -128,6 +130,47 @@ public class AuthController {
         return ResponseEntity.ok(Map.of("message", "Password has been reset successfully."));
     }
 
+    private void setTokenCookies(HttpServletResponse response, String accessToken, String refreshToken) {
+        if (accessToken != null) {
+            ResponseCookie accessCookie = ResponseCookie.from("accessToken", accessToken)
+                    .httpOnly(true)
+                    .path("/")
+                    .maxAge(7 * 24 * 60 * 60)
+                    .sameSite("Lax")
+                    .build();
+            response.addHeader(HttpHeaders.SET_COOKIE, accessCookie.toString());
+        }
+
+        if (refreshToken != null) {
+            ResponseCookie refreshCookie = ResponseCookie.from("refreshToken", refreshToken)
+                    .httpOnly(true)
+                    .path("/")
+                    .maxAge(30 * 24 * 60 * 60)
+                    .sameSite("Lax")
+                    .build();
+            response.addHeader(HttpHeaders.SET_COOKIE, refreshCookie.toString());
+        }
+    }
+
+    private void clearTokenCookies(HttpServletResponse response) {
+        ResponseCookie accessCookie = ResponseCookie.from("accessToken", "")
+                .httpOnly(true)
+                .path("/")
+                .maxAge(0)
+                .sameSite("Lax")
+                .build();
+
+        ResponseCookie refreshCookie = ResponseCookie.from("refreshToken", "")
+                .httpOnly(true)
+                .path("/")
+                .maxAge(0)
+                .sameSite("Lax")
+                .build();
+
+        response.addHeader(HttpHeaders.SET_COOKIE, accessCookie.toString());
+        response.addHeader(HttpHeaders.SET_COOKIE, refreshCookie.toString());
+    }
+
     private String extractRefreshToken(TokenRefreshRequest request, HttpServletRequest servletRequest) {
         if (request != null && request.getRefreshToken() != null) {
             return request.getRefreshToken();
@@ -140,34 +183,6 @@ public class AuthController {
             }
         }
         return null;
-    }
-
-    private void setTokenCookies(HttpServletResponse response, String accessToken, String refreshToken) {
-        if (accessToken != null) {
-            Cookie accessCookie = new Cookie("accessToken", accessToken);
-            accessCookie.setPath("/");
-            accessCookie.setMaxAge(7 * 24 * 60 * 60);
-            response.addCookie(accessCookie);
-        }
-        if (refreshToken != null) {
-            Cookie refreshCookie = new Cookie("refreshToken", refreshToken);
-            refreshCookie.setPath("/");
-            refreshCookie.setMaxAge(30 * 24 * 60 * 60);
-            response.addCookie(refreshCookie);
-        }
-    }
-
-    private void clearTokenCookies(HttpServletResponse response) {
-        Cookie accessCookie = new Cookie("accessToken", "");
-        accessCookie.setPath("/");
-        accessCookie.setMaxAge(0);
-
-        Cookie refreshCookie = new Cookie("refreshToken", "");
-        refreshCookie.setPath("/");
-        refreshCookie.setMaxAge(0);
-
-        response.addCookie(accessCookie);
-        response.addCookie(refreshCookie);
     }
 
     private void requireAnonymous() {
