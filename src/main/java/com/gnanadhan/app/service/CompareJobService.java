@@ -35,6 +35,7 @@ public class CompareJobService {
     private final SchemaComparisonService comparisonService;
     private final ObjectMapper objectMapper;
     private final ProjectRepository projectRepository;
+    private final ProjectService projectService;
     private final CurrentUserService currentUserService;
 
     public CompareJob startJob(JobCompareRequest request) {
@@ -43,6 +44,7 @@ public class CompareJobService {
         
         Project project = projectRepository.findById(request.getProjectId())
                 .orElseThrow(() -> new ResourceNotFoundException("Project not found"));
+        projectService.checkProjectAccess(project);
         User currentUser = currentUserService.getCurrentUser();
 
         String tagsJson = null;
@@ -129,15 +131,32 @@ public class CompareJobService {
     }
 
     public Page<CompareJob> getAllJobs(int page, int size) {
-        return compareJobRepository.findAll(PageRequest.of(page, size));
+        User currentUser = currentUserService.getCurrentUser();
+        if (currentUser.getRole().getName().equals("SUPER_ADMIN")) {
+            return compareJobRepository.findAllByOrderByStartedAtDesc(PageRequest.of(page, size));
+        } else {
+            return compareJobRepository.findAccessibleJobs(currentUser.getId(), PageRequest.of(page, size));
+        }
     }
     
     public Page<CompareJob> getJobsByProject(Long projectId, int page, int size) {
+        Project project = projectRepository.findById(projectId)
+                .orElseThrow(() -> new ResourceNotFoundException("Project not found"));
+        projectService.checkProjectAccess(project);
         return compareJobRepository.findByProjectIdOrderByStartedAtDesc(projectId, PageRequest.of(page, size));
     }
 
     public CompareJob getJobById(Long id) {
-        return compareJobRepository.findById(id)
+        CompareJob job = compareJobRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Compare Job not found"));
+        User currentUser = currentUserService.getCurrentUser();
+        if (!currentUser.getRole().getName().equals("SUPER_ADMIN")) {
+            if (job.getProject() != null) {
+                projectService.checkProjectAccess(job.getProject());
+            } else if (job.getCreatedBy() != null && !job.getCreatedBy().getId().equals(currentUser.getId())) {
+                throw new org.springframework.security.access.AccessDeniedException("You do not have permission to access this compare job");
+            }
+        }
+        return job;
     }
 }

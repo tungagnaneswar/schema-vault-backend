@@ -21,4 +21,11 @@ public interface CompareJobRepository extends JpaRepository<CompareJob, Long> {
     Page<CompareJob> findByProjectIdOrderByStartedAtDesc(Long projectId, Pageable pageable);
     @EntityGraph(attributePaths = {"sourceSnapshot.connection.environment", "targetSnapshot.connection.environment", "createdBy", "project"})
     Page<CompareJob> findAllByOrderByStartedAtDesc(Pageable pageable);
+
+    @EntityGraph(attributePaths = {"sourceSnapshot.connection.environment", "targetSnapshot.connection.environment", "createdBy", "project"})
+    @Query("SELECT DISTINCT j FROM CompareJob j LEFT JOIN j.project p WHERE j.createdBy.id = :userId OR (p IS NOT NULL AND p.createdBy.id = :userId) ORDER BY j.startedAt DESC")
+    Page<CompareJob> findAccessibleJobs(@Param("userId") Long userId, Pageable pageable);
+
+    @Query("SELECT COUNT(DISTINCT j) FROM CompareJob j LEFT JOIN j.project p WHERE j.createdBy.id = :userId OR (p IS NOT NULL AND p.createdBy.id = :userId)")
+    long countAccessibleJobs(@Param("userId") Long userId);
 }

@@ -38,27 +38,50 @@ public class DashboardService {
             activeConnections = dbConnectionRepository.findAccessibleConnections(user.getId(), PageRequest.of(0, 1)).getTotalElements();
         }
 
-        long schemasCompared = compareJobRepository.count(); // Global count for now
+        long schemasCompared;
+        List<RecentCompareJobDto> recentComparisons;
+
+        if (isSuperAdmin) {
+            schemasCompared = compareJobRepository.count();
+            recentComparisons = compareJobRepository.findAllByOrderByStartedAtDesc(PageRequest.of(0, 5))
+                    .getContent()
+                    .stream()
+                    .map(job -> RecentCompareJobDto.builder()
+                            .id(job.getId())
+                            .status(job.getStatus())
+                            .projectName(job.getProject() != null ? job.getProject().getName() : null)
+                            .sourceEnvironmentName(job.getSourceSnapshot().getConnection().getEnvironment().getName())
+                            .targetEnvironmentName(job.getTargetSnapshot().getConnection().getEnvironment().getName())
+                            .createdByEmail(job.getCreatedBy() != null ? job.getCreatedBy().getEmail() : null)
+                            .startedAt(job.getStartedAt())
+                            .completedAt(job.getCompletedAt())
+                            .durationMs(job.getDurationMs())
+                            .summaryStatistics(job.getSummaryStatistics())
+                            .build())
+                    .collect(Collectors.toList());
+        } else {
+            schemasCompared = compareJobRepository.countAccessibleJobs(user.getId());
+            recentComparisons = compareJobRepository.findAccessibleJobs(user.getId(), PageRequest.of(0, 5))
+                    .getContent()
+                    .stream()
+                    .map(job -> RecentCompareJobDto.builder()
+                            .id(job.getId())
+                            .status(job.getStatus())
+                            .projectName(job.getProject() != null ? job.getProject().getName() : null)
+                            .sourceEnvironmentName(job.getSourceSnapshot().getConnection().getEnvironment().getName())
+                            .targetEnvironmentName(job.getTargetSnapshot().getConnection().getEnvironment().getName())
+                            .createdByEmail(job.getCreatedBy() != null ? job.getCreatedBy().getEmail() : null)
+                            .startedAt(job.getStartedAt())
+                            .completedAt(job.getCompletedAt())
+                            .durationMs(job.getDurationMs())
+                            .summaryStatistics(job.getSummaryStatistics())
+                            .build())
+                    .collect(Collectors.toList());
+        }
+
         long activeUsers = isSuperAdmin ? userRepository.count() : 0;
-        long teams = teamRepository.count();
+        long teams = isSuperAdmin ? teamRepository.count() : teamRepository.countAccessibleTeams(user.getId());
         long systemAlerts = 0; // Static 0 for now as per plan
-        
-        List<RecentCompareJobDto> recentComparisons = compareJobRepository.findAllByOrderByStartedAtDesc(PageRequest.of(0, 5))
-                .getContent()
-                .stream()
-                .map(job -> RecentCompareJobDto.builder()
-                        .id(job.getId())
-                        .status(job.getStatus())
-                        .projectName(job.getProject() != null ? job.getProject().getName() : null)
-                        .sourceEnvironmentName(job.getSourceSnapshot().getConnection().getEnvironment().getName())
-                        .targetEnvironmentName(job.getTargetSnapshot().getConnection().getEnvironment().getName())
-                        .createdByEmail(job.getCreatedBy() != null ? job.getCreatedBy().getEmail() : null)
-                        .startedAt(job.getStartedAt())
-                        .completedAt(job.getCompletedAt())
-                        .durationMs(job.getDurationMs())
-                        .summaryStatistics(job.getSummaryStatistics())
-                        .build())
-                .collect(Collectors.toList());
 
         return DashboardResponse.builder()
                 .activeConnections(activeConnections)

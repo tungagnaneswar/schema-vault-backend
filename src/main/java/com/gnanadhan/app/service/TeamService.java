@@ -98,7 +98,14 @@ public class TeamService {
     }
 
     public List<TeamResponse> getAllTeams() {
-        return teamRepository.findAll().stream()
+        User currentUser = getCurrentUser();
+        List<Team> teams;
+        if (isGlobalAdmin(currentUser)) {
+            teams = teamRepository.findAll();
+        } else {
+            teams = teamRepository.findAccessibleTeams(currentUser.getId());
+        }
+        return teams.stream()
                 .map(teamMapper::toResponse)
                 .collect(Collectors.toList());
     }
@@ -106,6 +113,14 @@ public class TeamService {
     public TeamResponse getTeamById(Long id) {
         Team team = teamRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("Team not found"));
+        User currentUser = getCurrentUser();
+        if (!isGlobalAdmin(currentUser)) {
+            boolean isMemberOrOwner = team.getCreatedBy().getId().equals(currentUser.getId()) ||
+                    teamMemberRepository.existsByTeamIdAndUserId(id, currentUser.getId());
+            if (!isMemberOrOwner) {
+                throw new UnauthorizedException("You do not have permission to access this team");
+            }
+        }
         return teamMapper.toResponse(team);
     }
 
