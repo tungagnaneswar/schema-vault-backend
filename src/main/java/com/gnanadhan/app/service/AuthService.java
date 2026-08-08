@@ -14,8 +14,9 @@ import com.gnanadhan.app.repository.RegistrationOtpRepository;
 import com.gnanadhan.app.repository.RoleRepository;
 import com.gnanadhan.app.repository.UserRepository;
 import com.gnanadhan.app.security.JwtTokenProvider;
-import com.gnanadhan.app.security.LoginRateLimiterService;
-import com.gnanadhan.app.security.OtpRateLimiterService;
+import com.gnanadhan.app.security.ratelimit.RateLimitResult;
+import com.gnanadhan.app.security.ratelimit.RateLimitType;
+import com.gnanadhan.app.security.ratelimit.RateLimiterService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.authentication.AuthenticationManager;
@@ -46,13 +47,12 @@ public class AuthService {
     private final PasswordResetOtpRepository otpRepository;
     private final RegistrationOtpRepository registrationOtpRepository;
     private final EmailService emailService;
-    private final LoginRateLimiterService loginRateLimiterService;
-    private final OtpRateLimiterService otpRateLimiterService;
+    private final RateLimiterService rateLimiterService;
 
     private final SecureRandom secureRandom = new SecureRandom();
 
     public AuthResponse login(AuthRequest authRequest) {
-        loginRateLimiterService.checkLockout(authRequest.getEmail());
+        checkLoginLockout(authRequest.getEmail());
 
         Authentication authentication;
         try {
@@ -60,11 +60,11 @@ public class AuthService {
                     new UsernamePasswordAuthenticationToken(authRequest.getEmail(), authRequest.getPassword())
             );
         } catch (Exception ex) {
-            loginRateLimiterService.recordFailedAttempt(authRequest.getEmail());
+            rateLimiterService.record(RateLimitType.LOGIN, authRequest.getEmail());
             throw ex;
         }
 
-        loginRateLimiterService.recordSuccess(authRequest.getEmail());
+        rateLimiterService.reset(RateLimitType.LOGIN, authRequest.getEmail());
         SecurityContextHolder.getContext().setAuthentication(authentication);
 
         String accessToken = tokenProvider.generateToken(authentication);
@@ -83,8 +83,8 @@ public class AuthService {
 
     @Transactional(noRollbackFor = OtpException.class)
     public void register(RegisterRequest request, String clientIp) {
-        otpRateLimiterService.checkIpRateLimit(clientIp);
-        otpRateLimiterService.checkEmailLockout(request.getEmail(), clientIp);
+        checkOtpIpThrottle(clientIp);
+        checkOtpVerificationLockout(request.getEmail(), clientIp);
 
         Optional<User> existingUserOpt = userRepository.findByEmail(request.getEmail());
         User user;
@@ -110,7 +110,7 @@ public class AuthService {
             userRepository.save(user);
         }
 
-        otpRateLimiterService.checkEmailDispatchRateLimit(request.getEmail(), clientIp);
+        checkOtpDispatchRateLimit(request.getEmail(), clientIp);
         registrationOtpRepository.deleteByUser(user);
 
         String rawOtp = generateSixDigitOtp();
@@ -122,7 +122,7 @@ public class AuthService {
                 .build();
 
         registrationOtpRepository.save(otpRecord);
-        otpRateLimiterService.recordEmailDispatch(request.getEmail(), clientIp);
+        recordOtpDispatch(request.getEmail());
         emailService.sendRegistrationOtpEmail(request.getEmail(), rawOtp);
 
         log.info("[IP: {}] Registration OTP generated and email dispatched for user id={}", clientIp, user.getId());
@@ -135,8 +135,8 @@ public class AuthService {
 
     @Transactional(noRollbackFor = OtpException.class)
     public void resendRegistrationOtp(String email, String clientIp) {
-        otpRateLimiterService.checkIpRateLimit(clientIp);
-        otpRateLimiterService.checkEmailLockout(email, clientIp);
+        checkOtpIpThrottle(clientIp);
+        checkOtpVerificationLockout(email, clientIp);
 
         Optional<User> userOpt = userRepository.findByEmail(email);
 
@@ -150,7 +150,7 @@ public class AuthService {
             throw new IllegalArgumentException("Account is already verified. Please sign in.");
         }
 
-        otpRateLimiterService.checkEmailDispatchRateLimit(email, clientIp);
+        checkOtpDispatchRateLimit(email, clientIp);
         registrationOtpRepository.deleteByUser(user);
 
         String rawOtp = generateSixDigitOtp();
@@ -162,7 +162,7 @@ public class AuthService {
                 .build();
 
         registrationOtpRepository.save(otpRecord);
-        otpRateLimiterService.recordEmailDispatch(email, clientIp);
+        recordOtpDispatch(email);
         emailService.sendRegistrationOtpEmail(email, rawOtp);
 
         log.info("[IP: {}] Resent registration OTP for user id={}", clientIp, user.getId());
@@ -175,8 +175,8 @@ public class AuthService {
 
     @Transactional(noRollbackFor = OtpException.class)
     public AuthResponse verifyRegistration(String email, String rawOtp, String clientIp) {
-        otpRateLimiterService.checkIpRateLimit(clientIp);
-        otpRateLimiterService.checkEmailLockout(email, clientIp);
+        checkOtpIpThrottle(clientIp);
+        checkOtpVerificationLockout(email, clientIp);
 
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new OtpException("Invalid or expired OTP"));
@@ -190,7 +190,8 @@ public class AuthService {
                 .orElseThrow(() -> new OtpException("Invalid or expired OTP"));
 
         if (otpRecord.getAttemptCount() >= MAX_OTP_ATTEMPTS) {
-            otpRateLimiterService.triggerShortLockout(email, clientIp);
+            rateLimiterService.record(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
+            log.warn("[IP: {}] OTP verification lockout triggered for email: {}", clientIp, email);
             throw new OtpException("Too many failed attempts. Please request a new OTP using Resend OTP.");
         }
 
@@ -200,7 +201,8 @@ public class AuthService {
         if (!passwordEncoder.matches(rawOtp, otpRecord.getOtpHash())) {
             int remaining = MAX_OTP_ATTEMPTS - otpRecord.getAttemptCount();
             if (remaining <= 0) {
-                otpRateLimiterService.triggerShortLockout(email, clientIp);
+                rateLimiterService.record(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
+                log.warn("[IP: {}] OTP verification lockout triggered for email: {}", clientIp, email);
                 throw new OtpException("Too many failed attempts. Please request a new OTP using Resend OTP.");
             }
             log.warn("[IP: {}] Invalid registration OTP entered for email {}. {} attempt(s) remaining.", clientIp, email, remaining);
@@ -213,7 +215,7 @@ public class AuthService {
         user.setIsActive(true);
         userRepository.save(user);
 
-        otpRateLimiterService.resetLockout(email);
+        rateLimiterService.reset(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
         log.info("[IP: {}] Registration verified successfully for user id={}", clientIp, user.getId());
 
         String accessToken = tokenProvider.generateTokenFromUsername(user.getEmail());
@@ -250,8 +252,8 @@ public class AuthService {
 
     @Transactional(noRollbackFor = OtpException.class)
     public void forgotPassword(String email, String clientIp) {
-        otpRateLimiterService.checkIpRateLimit(clientIp);
-        otpRateLimiterService.checkEmailLockout(email, clientIp);
+        checkOtpIpThrottle(clientIp);
+        checkOtpVerificationLockout(email, clientIp);
 
         Optional<User> userOpt = userRepository.findByEmail(email);
 
@@ -262,9 +264,9 @@ public class AuthService {
 
         User user = userOpt.get();
 
-        try {
-            otpRateLimiterService.checkEmailDispatchRateLimit(email, clientIp);
-        } catch (OtpException ex) {
+        RateLimitResult cooldownResult = rateLimiterService.check(RateLimitType.OTP_DISPATCH_COOLDOWN, email);
+        RateLimitResult hourlyResult = rateLimiterService.check(RateLimitType.OTP_DISPATCH_HOURLY, email);
+        if (!cooldownResult.isAllowed() || !hourlyResult.isAllowed()) {
             log.info("[IP: {}] Forgot-password rate-limit triggered for email: {}", clientIp, email);
             return;
         }
@@ -280,7 +282,7 @@ public class AuthService {
                 .build();
 
         otpRepository.save(otpRecord);
-        otpRateLimiterService.recordEmailDispatch(email, clientIp);
+        recordOtpDispatch(email);
         emailService.sendOtpEmail(email, rawOtp);
 
         log.info("[IP: {}] OTP generated and email dispatched for user id={}", clientIp, user.getId());
@@ -293,8 +295,8 @@ public class AuthService {
 
     @Transactional(noRollbackFor = OtpException.class)
     public void verifyOtp(String email, String rawOtp, String clientIp) {
-        otpRateLimiterService.checkIpRateLimit(clientIp);
-        otpRateLimiterService.checkEmailLockout(email, clientIp);
+        checkOtpIpThrottle(clientIp);
+        checkOtpVerificationLockout(email, clientIp);
 
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new OtpException("Invalid or expired OTP"));
@@ -304,7 +306,8 @@ public class AuthService {
                 .orElseThrow(() -> new OtpException("Invalid or expired OTP"));
 
         if (otpRecord.getAttemptCount() >= MAX_OTP_ATTEMPTS) {
-            otpRateLimiterService.triggerShortLockout(email, clientIp);
+            rateLimiterService.record(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
+            log.warn("[IP: {}] OTP verification lockout triggered for email: {}", clientIp, email);
             throw new OtpException("Too many failed attempts. Please wait 3 minutes before trying again.");
         }
 
@@ -314,14 +317,15 @@ public class AuthService {
         if (!passwordEncoder.matches(rawOtp, otpRecord.getOtpHash())) {
             int remaining = MAX_OTP_ATTEMPTS - otpRecord.getAttemptCount();
             if (remaining <= 0) {
-                otpRateLimiterService.triggerShortLockout(email, clientIp);
+                rateLimiterService.record(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
+                log.warn("[IP: {}] OTP verification lockout triggered for email: {}", clientIp, email);
                 throw new OtpException("Too many failed attempts. Please wait 3 minutes before trying again.");
             }
             log.warn("[IP: {}] Invalid OTP entered for email {}. {} attempt(s) remaining.", clientIp, email, remaining);
             throw new OtpException("Invalid OTP. " + remaining + " attempt(s) remaining.");
         }
 
-        otpRateLimiterService.resetLockout(email);
+        rateLimiterService.reset(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
         log.info("[IP: {}] OTP verified successfully for user id={}", clientIp, user.getId());
     }
 
@@ -332,8 +336,8 @@ public class AuthService {
 
     @Transactional(noRollbackFor = OtpException.class)
     public void resetPassword(String email, String rawOtp, String newPassword, String clientIp) {
-        otpRateLimiterService.checkIpRateLimit(clientIp);
-        otpRateLimiterService.checkEmailLockout(email, clientIp);
+        checkOtpIpThrottle(clientIp);
+        checkOtpVerificationLockout(email, clientIp);
 
         User user = userRepository.findByEmail(email)
                 .orElseThrow(() -> new OtpException("Invalid or expired OTP"));
@@ -343,7 +347,8 @@ public class AuthService {
                 .orElseThrow(() -> new OtpException("Invalid or expired OTP"));
 
         if (otpRecord.getAttemptCount() >= MAX_OTP_ATTEMPTS) {
-            otpRateLimiterService.triggerShortLockout(email, clientIp);
+            rateLimiterService.record(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
+            log.warn("[IP: {}] OTP verification lockout triggered for email: {}", clientIp, email);
             throw new OtpException("Too many failed attempts. Please wait 3 minutes before trying again.");
         }
 
@@ -353,7 +358,8 @@ public class AuthService {
         if (!passwordEncoder.matches(rawOtp, otpRecord.getOtpHash())) {
             int remaining = MAX_OTP_ATTEMPTS - otpRecord.getAttemptCount();
             if (remaining <= 0) {
-                otpRateLimiterService.triggerShortLockout(email, clientIp);
+                rateLimiterService.record(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
+                log.warn("[IP: {}] OTP verification lockout triggered for email: {}", clientIp, email);
                 throw new OtpException("Too many failed attempts. Please wait 3 minutes before trying again.");
             }
             log.warn("[IP: {}] Invalid OTP entered during password reset for email {}. {} attempt(s) remaining.", clientIp, email, remaining);
@@ -366,9 +372,72 @@ public class AuthService {
         otpRecord.setIsUsed(true);
         otpRepository.save(otpRecord);
 
-        otpRateLimiterService.resetLockout(email);
+        rateLimiterService.reset(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
         log.info("[IP: {}] Password reset successfully for user id={}", clientIp, user.getId());
     }
+
+    // -------------------------------------------------------------------------
+    // Rate limit helpers — translate RateLimitResult into business exceptions
+    // -------------------------------------------------------------------------
+
+    private void checkLoginLockout(String email) {
+        RateLimitResult result = rateLimiterService.check(RateLimitType.LOGIN, email);
+        if (!result.isAllowed()) {
+            long remainingMinutes = (result.getRemainingSeconds() + 59) / 60;
+            throw new UnauthorizedException(
+                    "Account temporarily locked due to repeated failed login attempts. Please try again in "
+                            + remainingMinutes + " minute(s).");
+        }
+    }
+
+    private void checkOtpIpThrottle(String clientIp) {
+        if ("UNKNOWN".equalsIgnoreCase(clientIp)) {
+            return;
+        }
+        RateLimitResult result = rateLimiterService.checkAndRecord(RateLimitType.OTP_IP_THROTTLE, clientIp);
+        if (!result.isAllowed()) {
+            log.warn("[IP: {}] Rate limit exceeded on OTP endpoint.", clientIp);
+            throw new OtpException("Too many requests from this IP. Please wait a minute before trying again.");
+        }
+    }
+
+    private void checkOtpVerificationLockout(String email, String clientIp) {
+        RateLimitResult result = rateLimiterService.check(RateLimitType.OTP_VERIFICATION_LOCKOUT, email);
+        if (!result.isAllowed()) {
+            long remainingMinutes = (result.getRemainingSeconds() + 59) / 60;
+            log.warn("[IP: {}] Verification attempted for locked email: {}. Remaining lock: {}s",
+                    clientIp, email, result.getRemainingSeconds());
+            throw new OtpException(
+                    "Account temporarily paused due to repeated failed attempts. Please wait "
+                            + remainingMinutes + " minute(s).");
+        }
+    }
+
+    private void checkOtpDispatchRateLimit(String email, String clientIp) {
+        RateLimitResult cooldownResult = rateLimiterService.check(RateLimitType.OTP_DISPATCH_COOLDOWN, email);
+        if (!cooldownResult.isAllowed()) {
+            log.warn("[IP: {}] Dispatch cooldown active for email: {}. Remaining: {}s",
+                    clientIp, email, cooldownResult.getRemainingSeconds());
+            throw new OtpException(
+                    "Please wait " + cooldownResult.getRemainingSeconds()
+                            + " seconds before requesting another OTP.");
+        }
+
+        RateLimitResult hourlyResult = rateLimiterService.check(RateLimitType.OTP_DISPATCH_HOURLY, email);
+        if (!hourlyResult.isAllowed()) {
+            log.warn("[IP: {}] Hourly email cap reached for email: {}", clientIp, email);
+            throw new OtpException("Maximum OTP request limit reached for this hour. Please try again later.");
+        }
+    }
+
+    private void recordOtpDispatch(String email) {
+        rateLimiterService.record(RateLimitType.OTP_DISPATCH_COOLDOWN, email);
+        rateLimiterService.record(RateLimitType.OTP_DISPATCH_HOURLY, email);
+    }
+
+    // -------------------------------------------------------------------------
+    // Other helpers
+    // -------------------------------------------------------------------------
 
     private AuthResponse buildAuthResponse(User user, String accessToken, String refreshToken) {
         return AuthResponse.builder()

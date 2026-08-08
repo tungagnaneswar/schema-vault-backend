@@ -11,8 +11,9 @@ import com.gnanadhan.app.repository.RegistrationOtpRepository;
 import com.gnanadhan.app.repository.RoleRepository;
 import com.gnanadhan.app.repository.UserRepository;
 import com.gnanadhan.app.security.JwtTokenProvider;
-import com.gnanadhan.app.security.LoginRateLimiterService;
-import com.gnanadhan.app.security.OtpRateLimiterService;
+import com.gnanadhan.app.security.ratelimit.RateLimitResult;
+import com.gnanadhan.app.security.ratelimit.RateLimitType;
+import com.gnanadhan.app.security.ratelimit.RateLimiterService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
@@ -55,8 +56,7 @@ class AuthServiceOtpTest {
     @Mock private PasswordResetOtpRepository otpRepository;
     @Mock private RegistrationOtpRepository registrationOtpRepository;
     @Mock private EmailService emailService;
-    @Mock private LoginRateLimiterService loginRateLimiterService;
-    @Mock private OtpRateLimiterService otpRateLimiterService;
+    @Mock private RateLimiterService rateLimiterService;
 
     @InjectMocks
     private AuthService authService;
@@ -71,6 +71,12 @@ class AuthServiceOtpTest {
     @BeforeEach
     void setUp() {
         MockitoAnnotations.openMocks(this);
+
+        // Default: all rate limit checks return allowed
+        when(rateLimiterService.check(any(RateLimitType.class), anyString()))
+                .thenReturn(RateLimitResult.allowed());
+        when(rateLimiterService.checkAndRecord(any(RateLimitType.class), anyString()))
+                .thenReturn(RateLimitResult.allowed());
 
         testRole = new Role();
         testRole.setName("USER");
@@ -121,8 +127,8 @@ class AuthServiceOtpTest {
         @DisplayName("within 60s of last request → rate-limited, silent no-op")
         void forgotPassword_rateLimited_silentNoOp() {
             when(userRepository.findByEmail("user@example.com")).thenReturn(Optional.of(testUser));
-            doThrow(new OtpException("Please wait 60 seconds"))
-                    .when(otpRateLimiterService).checkEmailDispatchRateLimit(eq("user@example.com"), anyString());
+            when(rateLimiterService.check(RateLimitType.OTP_DISPATCH_COOLDOWN, "user@example.com"))
+                    .thenReturn(RateLimitResult.blocked(45));
 
             authService.forgotPassword("user@example.com");
 
@@ -359,12 +365,12 @@ class AuthServiceOtpTest {
                     .build();
 
             when(userRepository.findByEmail("unverified@example.com")).thenReturn(Optional.of(inactiveUser));
-            doThrow(new OtpException("Please wait 60 seconds"))
-                    .when(otpRateLimiterService).checkEmailDispatchRateLimit(eq("unverified@example.com"), anyString());
+            when(rateLimiterService.check(RateLimitType.OTP_DISPATCH_COOLDOWN, "unverified@example.com"))
+                    .thenReturn(RateLimitResult.blocked(45));
 
             assertThatThrownBy(() -> authService.resendRegistrationOtp("unverified@example.com"))
                     .isInstanceOf(OtpException.class)
-                    .hasMessageContaining("Please wait 60 seconds");
+                    .hasMessageContaining("Please wait");
         }
 
         @Test
@@ -388,7 +394,7 @@ class AuthServiceOtpTest {
         }
 
         @Test
-        @DisplayName("login calls checkLockout and recordSuccess on successful login")
+        @DisplayName("login calls check and reset on successful login")
         void login_successful_recordsSuccess() {
             com.gnanadhan.app.dto.AuthRequest authRequest = new com.gnanadhan.app.dto.AuthRequest();
             authRequest.setEmail("user@example.com");
@@ -407,12 +413,12 @@ class AuthServiceOtpTest {
             com.gnanadhan.app.dto.AuthResponse response = authService.login(authRequest);
 
             assertThat(response).isNotNull();
-            verify(loginRateLimiterService).checkLockout("user@example.com");
-            verify(loginRateLimiterService).recordSuccess("user@example.com");
+            verify(rateLimiterService).check(RateLimitType.LOGIN, "user@example.com");
+            verify(rateLimiterService).reset(RateLimitType.LOGIN, "user@example.com");
         }
 
         @Test
-        @DisplayName("login failed authentication calls recordFailedAttempt")
+        @DisplayName("login failed authentication calls record")
         void login_failed_recordsFailedAttempt() {
             com.gnanadhan.app.dto.AuthRequest authRequest = new com.gnanadhan.app.dto.AuthRequest();
             authRequest.setEmail("user@example.com");
@@ -423,8 +429,8 @@ class AuthServiceOtpTest {
             assertThatThrownBy(() -> authService.login(authRequest))
                     .isInstanceOf(com.gnanadhan.app.exception.UnauthorizedException.class);
 
-            verify(loginRateLimiterService).checkLockout("user@example.com");
-            verify(loginRateLimiterService).recordFailedAttempt("user@example.com");
+            verify(rateLimiterService).check(RateLimitType.LOGIN, "user@example.com");
+            verify(rateLimiterService).record(RateLimitType.LOGIN, "user@example.com");
         }
     }
 
