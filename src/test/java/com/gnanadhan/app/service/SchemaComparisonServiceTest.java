@@ -1,10 +1,12 @@
-package com.gnanadhan.app.service;
+package com.schemavault.app.service;
 
-import com.gnanadhan.app.dto.diff.DiffStatus;
-import com.gnanadhan.app.dto.diff.SchemaDiffResponse;
-import com.gnanadhan.app.dto.schema.ColumnModel;
-import com.gnanadhan.app.dto.schema.SchemaModel;
-import com.gnanadhan.app.dto.schema.TableModel;
+import com.schemavault.app.dto.diff.DiffStatus;
+import com.schemavault.app.dto.diff.SchemaDiffResponse;
+import com.schemavault.app.dto.schema.ColumnModel;
+import com.schemavault.app.dto.schema.SchemaModel;
+import com.schemavault.app.dto.schema.TableModel;
+import com.schemavault.app.service.SchemaComparisonService;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
@@ -27,7 +29,7 @@ class SchemaComparisonServiceTest {
                 .name("users")
                 .columns(List.of(ColumnModel.builder().name("id").type("integer").build()))
                 .build();
-                
+
         SchemaModel source = SchemaModel.builder().tables(List.of(table1)).build();
         SchemaModel target = SchemaModel.builder().tables(List.of()).build();
 
@@ -37,19 +39,19 @@ class SchemaComparisonServiceTest {
         assertEquals("users", response.getTableDiffs().get(0).getTableName());
         assertEquals(DiffStatus.MISSING_IN_TARGET, response.getTableDiffs().get(0).getStatus());
     }
-    
+
     @Test
     void compareSchemas_WithDefinitionMismatch() {
         TableModel sourceTable = TableModel.builder()
                 .name("users")
                 .columns(List.of(ColumnModel.builder().name("id").type("integer").build()))
                 .build();
-                
+
         TableModel targetTable = TableModel.builder()
                 .name("users")
                 .columns(List.of(ColumnModel.builder().name("id").type("bigint").build()))
                 .build();
-                
+
         SchemaModel source = SchemaModel.builder().tables(List.of(sourceTable)).build();
         SchemaModel target = SchemaModel.builder().tables(List.of(targetTable)).build();
 

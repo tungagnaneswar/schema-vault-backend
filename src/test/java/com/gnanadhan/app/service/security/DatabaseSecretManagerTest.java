@@ -1,6 +1,7 @@
-package com.gnanadhan.app.service.security;
+package com.schemavault.app.service.security;
 
-import com.gnanadhan.app.util.EncryptionUtil;
+import com.schemavault.app.service.security.DatabaseSecretManager;
+import com.schemavault.app.util.EncryptionUtil;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;

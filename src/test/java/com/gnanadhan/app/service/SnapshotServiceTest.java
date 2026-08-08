@@ -1,15 +1,16 @@
-package com.gnanadhan.app.service;
+package com.schemavault.app.service;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.gnanadhan.app.dto.schema.SchemaModel;
-import com.gnanadhan.app.entity.DatabaseEngine;
-import com.gnanadhan.app.entity.DbConnection;
-import com.gnanadhan.app.entity.SchemaSnapshot;
-import com.gnanadhan.app.repository.DbConnectionRepository;
-import com.gnanadhan.app.repository.SchemaSnapshotRepository;
-import com.gnanadhan.app.service.extractor.SchemaExtractor;
-import com.gnanadhan.app.service.extractor.SchemaExtractorFactory;
-import com.gnanadhan.app.service.security.SecretManager;
+import com.schemavault.app.dto.schema.SchemaModel;
+import com.schemavault.app.entity.DatabaseEngine;
+import com.schemavault.app.entity.DbConnection;
+import com.schemavault.app.entity.SchemaSnapshot;
+import com.schemavault.app.repository.DbConnectionRepository;
+import com.schemavault.app.repository.SchemaSnapshotRepository;
+import com.schemavault.app.service.SnapshotService;
+import com.schemavault.app.service.extractor.SchemaExtractor;
+import com.schemavault.app.service.extractor.SchemaExtractorFactory;
+import com.schemavault.app.service.security.SecretManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
@@ -55,17 +56,17 @@ class SnapshotServiceTest {
         when(dbConnectionRepository.findById(1L)).thenReturn(Optional.of(connection));
         when(secretManager.decrypt("encrypted")).thenReturn("plain");
         when(extractorFactory.getExtractor(DatabaseEngine.POSTGRES)).thenReturn(schemaExtractor);
-        
+
         SchemaModel schemaModel = SchemaModel.builder().databaseName("testdb").build();
         when(schemaExtractor.extract(connection, "plain")).thenReturn(schemaModel);
-        
+
         String json = "{}";
         when(objectMapper.writeValueAsString(schemaModel)).thenReturn(json);
-        
+
         SchemaSnapshot savedSnapshot = new SchemaSnapshot();
         savedSnapshot.setId(10L);
         savedSnapshot.setSnapshotData(json);
-        
+
         when(snapshotRepository.save(any(SchemaSnapshot.class))).thenReturn(savedSnapshot);
 
         SchemaSnapshot result = snapshotService.createSnapshot(1L);

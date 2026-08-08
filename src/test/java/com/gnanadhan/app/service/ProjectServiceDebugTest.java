@@ -1,11 +1,12 @@
-package com.gnanadhan.app.service;
+package com.schemavault.app.service;
 
-import com.gnanadhan.app.dto.ProjectRequest;
-import com.gnanadhan.app.entity.User;
-import com.gnanadhan.app.entity.Role;
-import com.gnanadhan.app.repository.ProjectRepository;
-import com.gnanadhan.app.repository.UserRepository;
-import com.gnanadhan.app.service.security.CurrentUserService;
+import com.schemavault.app.dto.ProjectRequest;
+import com.schemavault.app.entity.User;
+import com.schemavault.app.entity.Role;
+import com.schemavault.app.repository.ProjectRepository;
+import com.schemavault.app.repository.UserRepository;
+import com.schemavault.app.service.ProjectService;
+import com.schemavault.app.service.security.CurrentUserService;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;

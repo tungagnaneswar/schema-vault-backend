@@ -1,9 +1,14 @@
-package com.gnanadhan.app.security.ratelimit;
+package com.schemavault.app.security.ratelimit;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+
+import com.schemavault.app.security.ratelimit.InMemoryRateLimitStorage;
+import com.schemavault.app.security.ratelimit.RateLimitResult;
+import com.schemavault.app.security.ratelimit.RateLimitType;
+import com.schemavault.app.security.ratelimit.RateLimiterService;
 
 import static org.assertj.core.api.Assertions.assertThat;
 

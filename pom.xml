@@ -9,7 +9,7 @@
 		<relativePath/>
 		<!-- lookup parent from repository -->
 	</parent>
-	<groupId>com.gnanadhan</groupId>
+	<groupId>com.schemavault</groupId>
 	<artifactId>schema-vault-backend</artifactId>
 	<version>0.0.1-SNAPSHOT</version>
 	<name/>
