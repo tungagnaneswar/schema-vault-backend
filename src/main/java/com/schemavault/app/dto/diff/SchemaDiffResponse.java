@@ -8,6 +8,7 @@ import java.util.List;
 @Data
 @Builder
 public class SchemaDiffResponse {
+
     private String sourceEnvironment;
     private String targetEnvironment;
     private List<TableDiff> tableDiffs;
@@ -16,4 +17,5 @@ public class SchemaDiffResponse {
     private List<ObjectDiff> sequenceDiffs;
     private List<ObjectDiff> typeDiffs;
     private List<ObjectDiff> viewDiffs;
+    private ComparisonSummary summary;
 }

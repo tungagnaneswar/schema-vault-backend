@@ -9,9 +9,20 @@ import java.util.List;
 @Data
 @Builder
 public class ColumnDiff {
+
     private String columnName;
+
     private DiffStatus status;
+
     private ColumnModel sourceColumn;
+    
     private ColumnModel targetColumn;
+
     private List<String> mismatchDetails;
+
+    private List<PropertyDiff> propertyDiffs;
+
+    private MigrationOperation migrationOperation;
+
+    private ChangeSeverity severity;
 }

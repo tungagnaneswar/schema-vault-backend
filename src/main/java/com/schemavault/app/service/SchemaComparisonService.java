@@ -2,6 +2,8 @@ package com.schemavault.app.service;
 
 import com.schemavault.app.dto.diff.*;
 import com.schemavault.app.dto.schema.*;
+import com.schemavault.app.service.comparison.PostgresTypeNormalizer;
+import com.schemavault.app.service.comparison.PostgresDefaultNormalizer;
 import org.springframework.stereotype.Service;
 
 import java.util.*;
@@ -11,14 +13,47 @@ import java.util.stream.Collectors;
 @Service
 public class SchemaComparisonService {
 
-    public SchemaDiffResponse compareSchemas(SchemaModel source, SchemaModel target, String sourceEnv,
-            String targetEnv) {
-        List<TableDiff> tableDiffs = compareTables(source.getTables(), target.getTables());
-        List<ObjectDiff> functionDiffs = compareFunctions(source.getFunctions(), target.getFunctions());
-        List<ObjectDiff> procedureDiffs = compareProcedures(source.getProcedures(), target.getProcedures());
-        List<ObjectDiff> sequenceDiffs = compareSequences(source.getSequences(), target.getSequences());
-        List<ObjectDiff> typeDiffs = compareTypes(source.getTypes(), target.getTypes());
-        List<ObjectDiff> viewDiffs = compareViews(source.getViews(), target.getViews());
+    public SchemaDiffResponse compareSchemas(SchemaModel source, SchemaModel target, String sourceEnv, String targetEnv) {
+        ComparisonSummary.ComparisonSummaryBuilder summaryBuilder = ComparisonSummary.builder();
+        
+        List<TableDiff> tableDiffs = compareTables(source.getTables(), target.getTables(), summaryBuilder);
+        List<ObjectDiff> functionDiffs = compareObjects(source.getFunctions(), target.getFunctions(), "FUNCTION", FunctionModel::getName, f -> f.getName() + "(" + nvl(f.getArguments()) + ")", FunctionModel::getDefinition, summaryBuilder);
+        List<ObjectDiff> procedureDiffs = compareObjects(source.getProcedures(), target.getProcedures(), "PROCEDURE", ProcedureModel::getName, p -> p.getName() + "(" + nvl(p.getArguments()) + ")", ProcedureModel::getDefinition, summaryBuilder);
+        List<ObjectDiff> sequenceDiffs = compareObjects(source.getSequences(), target.getSequences(), "SEQUENCE", SequenceModel::getName, SequenceModel::getName, s -> "type=" + s.getDataType() + " start=" + s.getStartValue() + " inc=" + s.getIncrement(), summaryBuilder);
+        List<ObjectDiff> typeDiffs = compareObjects(source.getTypes(), target.getTypes(), "TYPE", TypeModel::getName, TypeModel::getName, TypeModel::getDefinition, summaryBuilder);
+        List<ObjectDiff> viewDiffs = compareObjects(source.getViews(), target.getViews(), "VIEW", ViewModel::getName, ViewModel::getName, ViewModel::getDefinition, summaryBuilder);
+
+        summaryBuilder.functionDiffs((int) functionDiffs.stream().filter(d -> d.getStatus() != DiffStatus.IDENTICAL).count());
+        summaryBuilder.procedureDiffs((int) procedureDiffs.stream().filter(d -> d.getStatus() != DiffStatus.IDENTICAL).count());
+        summaryBuilder.sequenceDiffs((int) sequenceDiffs.stream().filter(d -> d.getStatus() != DiffStatus.IDENTICAL).count());
+        summaryBuilder.typeDiffs((int) typeDiffs.stream().filter(d -> d.getStatus() != DiffStatus.IDENTICAL).count());
+        summaryBuilder.viewDiffs((int) viewDiffs.stream().filter(d -> d.getStatus() != DiffStatus.IDENTICAL).count());
+
+        int totalDestructive = 0;
+        int totalReview = 0;
+        int totalSafe = 0;
+
+        for (TableDiff td : tableDiffs) {
+            if (td.getSeverity() == ChangeSeverity.DESTRUCTIVE) totalDestructive++;
+            else if (td.getSeverity() == ChangeSeverity.REVIEW) totalReview++;
+            else if (td.getSeverity() == ChangeSeverity.SAFE && td.getStatus() != DiffStatus.IDENTICAL) totalSafe++;
+        }
+        
+        List<List<ObjectDiff>> allObjDiffs = List.of(functionDiffs, procedureDiffs, sequenceDiffs, typeDiffs, viewDiffs);
+        for (List<ObjectDiff> diffList : allObjDiffs) {
+            for (ObjectDiff od : diffList) {
+                if (od.getSeverity() == ChangeSeverity.DESTRUCTIVE) totalDestructive++;
+                else if (od.getSeverity() == ChangeSeverity.REVIEW) totalReview++;
+                else if (od.getSeverity() == ChangeSeverity.SAFE && od.getStatus() != DiffStatus.IDENTICAL) totalSafe++;
+            }
+        }
+        
+        summaryBuilder.destructiveChanges(totalDestructive);
+        summaryBuilder.reviewChanges(totalReview);
+        summaryBuilder.safeChanges(totalSafe);
+
+        ComparisonSummary summary = summaryBuilder.build();
+        summary.setOverallRisk(calculateOverallRisk(summary));
 
         return SchemaDiffResponse.builder()
                 .sourceEnvironment(sourceEnv)
@@ -29,67 +64,107 @@ public class SchemaComparisonService {
                 .sequenceDiffs(sequenceDiffs)
                 .typeDiffs(typeDiffs)
                 .viewDiffs(viewDiffs)
+                .summary(summary)
                 .build();
+    }
+    
+    private ChangeSeverity calculateOverallRisk(ComparisonSummary summary) {
+        if (summary.getDestructiveChanges() > 0) return ChangeSeverity.DESTRUCTIVE;
+        if (summary.getReviewChanges() > 0) return ChangeSeverity.REVIEW;
+        return ChangeSeverity.SAFE;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Tables
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private List<TableDiff> compareTables(List<TableModel> sourceTables, List<TableModel> targetTables) {
+    private List<TableDiff> compareTables(List<TableModel> sourceTables, List<TableModel> targetTables, ComparisonSummary.ComparisonSummaryBuilder summaryBuilder) {
         List<TableDiff> diffs = new ArrayList<>();
 
-        Map<String, TableModel> sourceMap = sourceTables.stream()
-                .collect(Collectors.toMap(TableModel::getName, Function.identity()));
-        Map<String, TableModel> targetMap = targetTables.stream()
-                .collect(Collectors.toMap(TableModel::getName, Function.identity()));
+        Map<String, TableModel> sourceMap = safeList(sourceTables).stream().collect(Collectors.toMap(TableModel::getName, Function.identity()));
+        Map<String, TableModel> targetMap = safeList(targetTables).stream().collect(Collectors.toMap(TableModel::getName, Function.identity()));
 
         Set<String> allNames = new TreeSet<>();
         allNames.addAll(sourceMap.keySet());
         allNames.addAll(targetMap.keySet());
+        
+        summaryBuilder.tablesChecked(allNames.size());
+        
+        int identical = 0, sourceOnly = 0, targetOnly = 0, modified = 0;
 
         for (String name : allNames) {
             TableModel src = sourceMap.get(name);
             TableModel tgt = targetMap.get(name);
 
             if (src != null && tgt == null) {
-                diffs.add(TableDiff.builder()
-                        .tableName(name)
-                        .status(DiffStatus.MISSING_IN_TARGET)
-                        .columnDiffs(Collections.emptyList())
-                        .primaryKeyDiff(null)
-                        .constraintDiffs(Collections.emptyList())
-                        .foreignKeyDiffs(Collections.emptyList())
-                        .indexDiffs(Collections.emptyList())
-                        .triggerDiffs(Collections.emptyList())
-                        .build());
+                // Table in source only
+                sourceOnly++;
+                TableDiff diff = buildTableDiff(name, DiffStatus.MISSING_IN_TARGET, MigrationOperation.ADD_TABLE, ChangeSeverity.SAFE);
+                
+                // Track sub-items
+                diff.setColumnsSourceOnly(src.getColumns().size());
+                diff.setChangeCount(src.getColumns().size() + (src.getPrimaryKeys() != null ? 1 : 0) + safeList(src.getForeignKeys()).size() + safeList(src.getIndexes()).size() + safeList(src.getConstraints()).size());
+                
+                // Add column diffs for UI
+                diff.setColumnDiffs(src.getColumns().stream().map(c -> ColumnDiff.builder()
+                    .columnName(c.getName()).status(DiffStatus.MISSING_IN_TARGET)
+                    .sourceColumn(c).migrationOperation(MigrationOperation.ADD_COLUMN).severity(ChangeSeverity.SAFE)
+                    .build()).collect(Collectors.toList()));
+                    
+                diffs.add(diff);
             } else if (src == null) {
-                diffs.add(TableDiff.builder()
-                        .tableName(name)
-                        .status(DiffStatus.MISSING_IN_SOURCE)
-                        .columnDiffs(Collections.emptyList())
-                        .primaryKeyDiff(null)
-                        .constraintDiffs(Collections.emptyList())
-                        .foreignKeyDiffs(Collections.emptyList())
-                        .indexDiffs(Collections.emptyList())
-                        .triggerDiffs(Collections.emptyList())
-                        .build());
+                // Table in target only
+                targetOnly++;
+                TableDiff diff = buildTableDiff(name, DiffStatus.MISSING_IN_SOURCE, MigrationOperation.DROP_TABLE, ChangeSeverity.DESTRUCTIVE);
+                
+                diff.setColumnsTargetOnly(tgt.getColumns().size());
+                diff.setChangeCount(tgt.getColumns().size() + (tgt.getPrimaryKeys() != null ? 1 : 0) + safeList(tgt.getForeignKeys()).size() + safeList(tgt.getIndexes()).size() + safeList(tgt.getConstraints()).size());
+                
+                diff.setColumnDiffs(tgt.getColumns().stream().map(c -> ColumnDiff.builder()
+                    .columnName(c.getName()).status(DiffStatus.MISSING_IN_SOURCE)
+                    .targetColumn(c).migrationOperation(MigrationOperation.DROP_COLUMN).severity(ChangeSeverity.DESTRUCTIVE)
+                    .build()).collect(Collectors.toList()));
+                    
+                diffs.add(diff);
             } else {
                 // Both exist — deep compare
-                List<ColumnDiff> columnDiffs = compareColumns(src.getColumns(), tgt.getColumns());
+                List<ColumnDiff> columnDiffs = compareColumns(src.getColumns(), tgt.getColumns(), summaryBuilder);
                 PrimaryKeyDiff pkDiff = comparePrimaryKeys(src.getPrimaryKeys(), tgt.getPrimaryKeys());
-                List<ObjectDiff> constraintDiffs = compareConstraints(src.getConstraints(), tgt.getConstraints());
-                List<ObjectDiff> fkDiffs = compareForeignKeys(src.getForeignKeys(), tgt.getForeignKeys());
-                List<ObjectDiff> indexDiffs = compareIndexes(src.getIndexes(), tgt.getIndexes());
-                List<ObjectDiff> triggerDiffs = compareTriggers(src.getTriggers(), tgt.getTriggers());
+                List<ObjectDiff> constraintDiffs = compareObjects(src.getConstraints(), tgt.getConstraints(), "CONSTRAINT", ConstraintModel::getName, ConstraintModel::getName, c -> c.getType() + ": " + c.getDefinition(), summaryBuilder);
+                List<ObjectDiff> fkDiffs = compareObjects(src.getForeignKeys(), tgt.getForeignKeys(), "FOREIGN_KEY", ForeignKeyModel::getName, ForeignKeyModel::getName, fk -> String.join(", ", fk.getColumns()) + " → " + fk.getReferencedTable() + "(" + String.join(", ", fk.getReferencedColumns()) + ")", summaryBuilder);
+                List<ObjectDiff> indexDiffs = compareObjects(src.getIndexes(), tgt.getIndexes(), "INDEX", IndexModel::getName, IndexModel::getName, IndexModel::getDefinition, summaryBuilder);
+                List<ObjectDiff> triggerDiffs = compareObjects(src.getTriggers(), tgt.getTriggers(), "TRIGGER", TriggerModel::getName, TriggerModel::getName, t -> t.getTiming() + " " + t.getEvent() + ": " + t.getDefinition(), summaryBuilder);
 
-                // Compute table-level status from all nested diffs
-                DiffStatus tableStatus = computeTableStatus(columnDiffs, pkDiff, constraintDiffs, fkDiffs, indexDiffs,
-                        triggerDiffs);
+                int colsSrcOnly = (int) columnDiffs.stream().filter(c -> c.getStatus() == DiffStatus.MISSING_IN_TARGET).count();
+                int colsTgtOnly = (int) columnDiffs.stream().filter(c -> c.getStatus() == DiffStatus.MISSING_IN_SOURCE).count();
+                int colsModified = (int) columnDiffs.stream().filter(c -> c.getStatus() != DiffStatus.IDENTICAL && c.getStatus() != DiffStatus.MISSING_IN_TARGET && c.getStatus() != DiffStatus.MISSING_IN_SOURCE).count();
+                
+                int totalChanges = colsSrcOnly + colsTgtOnly + colsModified 
+                    + (pkDiff != null && pkDiff.getStatus() != DiffStatus.IDENTICAL ? 1 : 0)
+                    + (int) constraintDiffs.stream().filter(c -> c.getStatus() != DiffStatus.IDENTICAL).count()
+                    + (int) fkDiffs.stream().filter(c -> c.getStatus() != DiffStatus.IDENTICAL).count()
+                    + (int) indexDiffs.stream().filter(c -> c.getStatus() != DiffStatus.IDENTICAL).count()
+                    + (int) triggerDiffs.stream().filter(c -> c.getStatus() != DiffStatus.IDENTICAL).count();
+
+                DiffStatus tableStatus = totalChanges > 0 ? DiffStatus.DEFINITION_MISMATCH : DiffStatus.IDENTICAL;
+                MigrationOperation tableOp = totalChanges > 0 ? MigrationOperation.ALTER_TABLE : MigrationOperation.NONE;
+                ChangeSeverity maxSeverity = ChangeSeverity.SAFE;
+                
+                if (columnDiffs.stream().anyMatch(c -> c.getSeverity() == ChangeSeverity.DESTRUCTIVE)) maxSeverity = ChangeSeverity.DESTRUCTIVE;
+                else if (columnDiffs.stream().anyMatch(c -> c.getSeverity() == ChangeSeverity.REVIEW)) maxSeverity = ChangeSeverity.REVIEW;
+
+                if (totalChanges == 0) identical++;
+                else modified++;
 
                 diffs.add(TableDiff.builder()
                         .tableName(name)
                         .status(tableStatus)
+                        .migrationOperation(tableOp)
+                        .severity(maxSeverity)
+                        .changeCount(totalChanges)
+                        .columnsSourceOnly(colsSrcOnly)
+                        .columnsTargetOnly(colsTgtOnly)
+                        .columnsModified(colsModified)
                         .columnDiffs(columnDiffs)
                         .primaryKeyDiff(pkDiff)
                         .constraintDiffs(constraintDiffs)
@@ -99,42 +174,38 @@ public class SchemaComparisonService {
                         .build());
             }
         }
-
+        
+        summaryBuilder.tablesIdentical(identical).tablesSourceOnly(sourceOnly).tablesTargetOnly(targetOnly).tablesModified(modified);
         return diffs;
     }
-
-    private DiffStatus computeTableStatus(List<ColumnDiff> columnDiffs, PrimaryKeyDiff pkDiff,
-            List<ObjectDiff> constraintDiffs, List<ObjectDiff> fkDiffs,
-            List<ObjectDiff> indexDiffs, List<ObjectDiff> triggerDiffs) {
-        // If any nested diff has a non-IDENTICAL status, the table has differences
-        boolean hasTypeMismatch = columnDiffs.stream().anyMatch(d -> d.getStatus() == DiffStatus.TYPE_MISMATCH);
-
-        boolean hasAnyDiff = columnDiffs.stream().anyMatch(d -> d.getStatus() != DiffStatus.IDENTICAL)
-                || (pkDiff != null && pkDiff.getStatus() != DiffStatus.IDENTICAL)
-                || fkDiffs.stream().anyMatch(d -> d.getStatus() != DiffStatus.IDENTICAL);
-
-        if (!hasAnyDiff)
-            return DiffStatus.IDENTICAL;
-        if (hasTypeMismatch)
-            return DiffStatus.TYPE_MISMATCH;
-        return DiffStatus.DEFINITION_MISMATCH;
+    
+    private TableDiff buildTableDiff(String name, DiffStatus status, MigrationOperation op, ChangeSeverity sev) {
+        return TableDiff.builder()
+            .tableName(name).status(status).migrationOperation(op).severity(sev)
+            .columnDiffs(Collections.emptyList())
+            .constraintDiffs(Collections.emptyList())
+            .foreignKeyDiffs(Collections.emptyList())
+            .indexDiffs(Collections.emptyList())
+            .triggerDiffs(Collections.emptyList())
+            .build();
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Columns
     // ═══════════════════════════════════════════════════════════════════════════
 
-    private List<ColumnDiff> compareColumns(List<ColumnModel> sourceCols, List<ColumnModel> targetCols) {
+    private List<ColumnDiff> compareColumns(List<ColumnModel> sourceCols, List<ColumnModel> targetCols, ComparisonSummary.ComparisonSummaryBuilder summaryBuilder) {
         List<ColumnDiff> diffs = new ArrayList<>();
 
-        Map<String, ColumnModel> sourceMap = sourceCols.stream()
-                .collect(Collectors.toMap(ColumnModel::getName, Function.identity()));
-        Map<String, ColumnModel> targetMap = targetCols.stream()
-                .collect(Collectors.toMap(ColumnModel::getName, Function.identity()));
+        Map<String, ColumnModel> sourceMap = safeList(sourceCols).stream().collect(Collectors.toMap(ColumnModel::getName, Function.identity()));
+        Map<String, ColumnModel> targetMap = safeList(targetCols).stream().collect(Collectors.toMap(ColumnModel::getName, Function.identity()));
 
         Set<String> allCols = new TreeSet<>();
         allCols.addAll(sourceMap.keySet());
         allCols.addAll(targetMap.keySet());
+        
+        int safeCount = 0, reviewCount = 0, destructiveCount = 0;
+        int colSrc = 0, colTgt = 0, colMod = 0;
 
         for (String colName : allCols) {
             ColumnModel src = sourceMap.get(colName);
@@ -143,411 +214,134 @@ public class SchemaComparisonService {
             if (src != null && tgt == null) {
                 diffs.add(ColumnDiff.builder()
                         .columnName(colName).status(DiffStatus.MISSING_IN_TARGET)
+                        .migrationOperation(MigrationOperation.ADD_COLUMN).severity(ChangeSeverity.SAFE)
                         .sourceColumn(src).targetColumn(null)
                         .mismatchDetails(Collections.emptyList()).build());
+                safeCount++; colSrc++;
             } else if (src == null) {
                 diffs.add(ColumnDiff.builder()
                         .columnName(colName).status(DiffStatus.MISSING_IN_SOURCE)
+                        .migrationOperation(MigrationOperation.DROP_COLUMN).severity(ChangeSeverity.DESTRUCTIVE)
                         .sourceColumn(null).targetColumn(tgt)
                         .mismatchDetails(Collections.emptyList()).build());
+                destructiveCount++; colTgt++;
             } else {
+                List<PropertyDiff> props = new ArrayList<>();
                 List<String> details = new ArrayList<>();
-                boolean typeDiffers = false;
-
-                // Check type
-                if (!Objects.equals(src.getType(), tgt.getType())) {
+                
+                // TYPE
+                if (!PostgresTypeNormalizer.typesAreEquivalent(src.getType(), tgt.getType())) {
+                    props.add(PropertyDiff.builder().property("type").sourceValue(src.getType()).targetValue(tgt.getType()).status(DiffStatus.TYPE_MISMATCH).severity(ChangeSeverity.REVIEW).explanation("Type differs after normalization").build());
                     details.add("type: " + src.getType() + " → " + tgt.getType());
-                    typeDiffers = true;
+                } else {
+                    props.add(PropertyDiff.builder().property("type").sourceValue(src.getType()).targetValue(tgt.getType()).status(DiffStatus.IDENTICAL).severity(ChangeSeverity.SAFE).build());
                 }
 
-                // Check max length
-                if (!Objects.equals(src.getMaxLength(), tgt.getMaxLength())) {
-                    details.add("maxLength: " + src.getMaxLength() + " → " + tgt.getMaxLength());
-                    typeDiffers = true;
-                }
-
-                // Check numeric precision
-                if (!Objects.equals(src.getNumericPrecision(), tgt.getNumericPrecision())) {
-                    details.add("numericPrecision: " + src.getNumericPrecision() + " → " + tgt.getNumericPrecision());
-                    typeDiffers = true;
-                }
-
-                // Check numeric scale
-                if (!Objects.equals(src.getNumericScale(), tgt.getNumericScale())) {
-                    details.add("numericScale: " + src.getNumericScale() + " → " + tgt.getNumericScale());
-                    typeDiffers = true;
-                }
-
-                // Check nullable
+                // NULLABLE
                 if (src.isNullable() != tgt.isNullable()) {
+                    ChangeSeverity sev = src.isNullable() ? ChangeSeverity.SAFE : ChangeSeverity.REVIEW; // true->false is review, false->true is safe
+                    props.add(PropertyDiff.builder().property("nullable").sourceValue(String.valueOf(src.isNullable())).targetValue(String.valueOf(tgt.isNullable())).status(DiffStatus.NULLABILITY_MISMATCH).severity(sev).build());
                     details.add("nullable: " + src.isNullable() + " → " + tgt.isNullable());
                 }
 
-                // Check default
-                if (!Objects.equals(src.getDefaultValue(), tgt.getDefaultValue())) {
+                // DEFAULT
+                if (!PostgresDefaultNormalizer.defaultsAreEquivalent(src.getDefaultValue(), tgt.getDefaultValue())) {
+                    props.add(PropertyDiff.builder().property("default").sourceValue(nvl(src.getDefaultValue())).targetValue(nvl(tgt.getDefaultValue())).status(DiffStatus.DEFAULT_MISMATCH).severity(ChangeSeverity.REVIEW).build());
                     details.add("default: " + nvl(src.getDefaultValue()) + " → " + nvl(tgt.getDefaultValue()));
+                }
+                
+                // LENGTH
+                if (!Objects.equals(src.getMaxLength(), tgt.getMaxLength())) {
+                    props.add(PropertyDiff.builder().property("maxLength").sourceValue(String.valueOf(src.getMaxLength())).targetValue(String.valueOf(tgt.getMaxLength())).status(DiffStatus.LENGTH_MISMATCH).severity(ChangeSeverity.REVIEW).build());
+                    details.add("maxLength: " + src.getMaxLength() + " → " + tgt.getMaxLength());
+                }
+
+                // PRECISION
+                if (!Objects.equals(src.getNumericPrecision(), tgt.getNumericPrecision())) {
+                    props.add(PropertyDiff.builder().property("precision").sourceValue(String.valueOf(src.getNumericPrecision())).targetValue(String.valueOf(tgt.getNumericPrecision())).status(DiffStatus.PRECISION_MISMATCH).severity(ChangeSeverity.REVIEW).build());
+                    details.add("precision: " + src.getNumericPrecision() + " → " + tgt.getNumericPrecision());
                 }
 
                 if (details.isEmpty()) {
                     diffs.add(ColumnDiff.builder()
                             .columnName(colName).status(DiffStatus.IDENTICAL)
+                            .migrationOperation(MigrationOperation.NONE).severity(ChangeSeverity.SAFE)
                             .sourceColumn(src).targetColumn(tgt)
-                            .mismatchDetails(Collections.emptyList()).build());
+                            .propertyDiffs(props).mismatchDetails(Collections.emptyList()).build());
                 } else {
-                    DiffStatus status = typeDiffers ? DiffStatus.TYPE_MISMATCH : DiffStatus.DEFINITION_MISMATCH;
+                    DiffStatus worstStatus = props.stream().map(PropertyDiff::getStatus).filter(s -> s != DiffStatus.IDENTICAL).findFirst().orElse(DiffStatus.DEFINITION_MISMATCH);
+                    ChangeSeverity worstSev = props.stream().map(PropertyDiff::getSeverity).max(Comparator.naturalOrder()).orElse(ChangeSeverity.SAFE);
+                    
                     diffs.add(ColumnDiff.builder()
-                            .columnName(colName).status(status)
+                            .columnName(colName).status(worstStatus)
+                            .migrationOperation(MigrationOperation.ALTER_COLUMN).severity(worstSev)
                             .sourceColumn(src).targetColumn(tgt)
-                            .mismatchDetails(details).build());
+                            .propertyDiffs(props).mismatchDetails(details).build());
+                            
+                    if (worstSev == ChangeSeverity.DESTRUCTIVE) destructiveCount++;
+                    else if (worstSev == ChangeSeverity.REVIEW) reviewCount++;
+                    else safeCount++;
+                    colMod++;
                 }
             }
         }
-
+        
         return diffs;
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Primary Keys
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private PrimaryKeyDiff comparePrimaryKeys(List<String> sourcePks, List<String> targetPks) {
-        List<String> src = sourcePks != null ? sourcePks : Collections.emptyList();
-        List<String> tgt = targetPks != null ? targetPks : Collections.emptyList();
-
-        if (src.isEmpty() && tgt.isEmpty()) {
-            return null; // No PK on either side
-        }
-
-        DiffStatus status;
-        if (src.equals(tgt)) {
-            status = DiffStatus.IDENTICAL;
-        } else if (src.isEmpty()) {
-            status = DiffStatus.MISSING_IN_SOURCE;
-        } else if (tgt.isEmpty()) {
-            status = DiffStatus.MISSING_IN_TARGET;
-        } else {
-            status = DiffStatus.DEFINITION_MISMATCH;
-        }
-
-        return PrimaryKeyDiff.builder()
-                .status(status)
-                .sourceColumns(src)
-                .targetColumns(tgt)
-                .build();
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Constraints
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private List<ObjectDiff> compareConstraints(List<ConstraintModel> sourceList, List<ConstraintModel> targetList) {
-        Map<String, ConstraintModel> srcMap = safeList(sourceList).stream()
-                .collect(Collectors.toMap(ConstraintModel::getName, Function.identity()));
-        Map<String, ConstraintModel> tgtMap = safeList(targetList).stream()
-                .collect(Collectors.toMap(ConstraintModel::getName, Function.identity()));
-
-        return compareByName(srcMap, tgtMap,
-                c -> c.getType() + ": " + c.getDefinition(),
-                (s, t) -> {
-                    List<String> details = new ArrayList<>();
-                    if (!Objects.equals(s.getType(), t.getType())) {
-                        details.add("type: " + s.getType() + " → " + t.getType());
-                    }
-                    if (!Objects.equals(s.getDefinition(), t.getDefinition())) {
-                        details.add("definition changed");
-                    }
-                    return details;
-                });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Foreign Keys
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private List<ObjectDiff> compareForeignKeys(List<ForeignKeyModel> sourceList, List<ForeignKeyModel> targetList) {
-        Map<String, ForeignKeyModel> srcMap = safeList(sourceList).stream()
-                .collect(Collectors.toMap(ForeignKeyModel::getName, Function.identity()));
-        Map<String, ForeignKeyModel> tgtMap = safeList(targetList).stream()
-                .collect(Collectors.toMap(ForeignKeyModel::getName, Function.identity()));
-
-        return compareByName(srcMap, tgtMap,
-                fk -> String.join(", ", fk.getColumns()) + " → " + fk.getReferencedTable() + "("
-                        + String.join(", ", fk.getReferencedColumns()) + ")",
-                (s, t) -> {
-                    List<String> details = new ArrayList<>();
-                    if (!Objects.equals(s.getColumns(), t.getColumns())) {
-                        details.add("columns: " + s.getColumns() + " → " + t.getColumns());
-                    }
-                    if (!Objects.equals(s.getReferencedTable(), t.getReferencedTable())) {
-                        details.add("referencedTable: " + s.getReferencedTable() + " → " + t.getReferencedTable());
-                    }
-                    if (!Objects.equals(s.getReferencedColumns(), t.getReferencedColumns())) {
-                        details.add(
-                                "referencedColumns: " + s.getReferencedColumns() + " → " + t.getReferencedColumns());
-                    }
-                    if (!Objects.equals(s.getUpdateRule(), t.getUpdateRule())) {
-                        details.add("updateRule: " + s.getUpdateRule() + " → " + t.getUpdateRule());
-                    }
-                    if (!Objects.equals(s.getDeleteRule(), t.getDeleteRule())) {
-                        details.add("deleteRule: " + s.getDeleteRule() + " → " + t.getDeleteRule());
-                    }
-                    return details;
-                });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Indexes
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private List<ObjectDiff> compareIndexes(List<IndexModel> sourceList, List<IndexModel> targetList) {
-        Map<String, IndexModel> srcMap = safeList(sourceList).stream()
-                .collect(Collectors.toMap(IndexModel::getName, Function.identity()));
-        Map<String, IndexModel> tgtMap = safeList(targetList).stream()
-                .collect(Collectors.toMap(IndexModel::getName, Function.identity()));
-
-        return compareByName(srcMap, tgtMap,
-                IndexModel::getDefinition,
-                (s, t) -> {
-                    List<String> details = new ArrayList<>();
-                    if (!Objects.equals(s.getColumns(), t.getColumns())) {
-                        details.add("columns: " + s.getColumns() + " → " + t.getColumns());
-                    }
-                    if (s.isUnique() != t.isUnique()) {
-                        details.add("unique: " + s.isUnique() + " → " + t.isUnique());
-                    }
-                    if (!Objects.equals(s.getIndexType(), t.getIndexType())) {
-                        details.add("indexType: " + s.getIndexType() + " → " + t.getIndexType());
-                    }
-                    if (!Objects.equals(s.getDefinition(), t.getDefinition())) {
-                        details.add("definition changed");
-                    }
-                    return details;
-                });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Triggers
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private List<ObjectDiff> compareTriggers(List<TriggerModel> sourceList, List<TriggerModel> targetList) {
-        Map<String, TriggerModel> srcMap = safeList(sourceList).stream()
-                .collect(Collectors.toMap(TriggerModel::getName, Function.identity()));
-        Map<String, TriggerModel> tgtMap = safeList(targetList).stream()
-                .collect(Collectors.toMap(TriggerModel::getName, Function.identity()));
-
-        return compareByName(srcMap, tgtMap,
-                t -> t.getTiming() + " " + t.getEvent() + ": " + t.getDefinition(),
-                (s, t) -> {
-                    List<String> details = new ArrayList<>();
-                    if (!Objects.equals(s.getEvent(), t.getEvent())) {
-                        details.add("event: " + s.getEvent() + " → " + t.getEvent());
-                    }
-                    if (!Objects.equals(s.getTiming(), t.getTiming())) {
-                        details.add("timing: " + s.getTiming() + " → " + t.getTiming());
-                    }
-                    if (!Objects.equals(s.getDefinition(), t.getDefinition())) {
-                        details.add("definition changed");
-                    }
-                    return details;
-                });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Functions
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private List<ObjectDiff> compareFunctions(List<FunctionModel> sourceList, List<FunctionModel> targetList) {
-        // Use name + arguments as the key since PostgreSQL supports function
-        // overloading
-        Map<String, FunctionModel> srcMap = safeList(sourceList).stream()
-                .collect(Collectors.toMap(f -> f.getName() + "(" + nvl(f.getArguments()) + ")", Function.identity()));
-        Map<String, FunctionModel> tgtMap = safeList(targetList).stream()
-                .collect(Collectors.toMap(f -> f.getName() + "(" + nvl(f.getArguments()) + ")", Function.identity()));
-
-        return compareByName(srcMap, tgtMap,
-                FunctionModel::getDefinition,
-                (s, t) -> {
-                    List<String> details = new ArrayList<>();
-                    if (!Objects.equals(s.getReturnType(), t.getReturnType())) {
-                        details.add("returnType: " + s.getReturnType() + " → " + t.getReturnType());
-                    }
-                    if (!Objects.equals(s.getLanguage(), t.getLanguage())) {
-                        details.add("language: " + s.getLanguage() + " → " + t.getLanguage());
-                    }
-                    if (!Objects.equals(s.getDefinition(), t.getDefinition())) {
-                        details.add("definition changed");
-                    }
-                    return details;
-                });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Procedures
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private List<ObjectDiff> compareProcedures(List<ProcedureModel> sourceList, List<ProcedureModel> targetList) {
-        Map<String, ProcedureModel> srcMap = safeList(sourceList).stream()
-                .collect(Collectors.toMap(p -> p.getName() + "(" + nvl(p.getArguments()) + ")", Function.identity()));
-        Map<String, ProcedureModel> tgtMap = safeList(targetList).stream()
-                .collect(Collectors.toMap(p -> p.getName() + "(" + nvl(p.getArguments()) + ")", Function.identity()));
-
-        return compareByName(srcMap, tgtMap,
-                ProcedureModel::getDefinition,
-                (s, t) -> {
-                    List<String> details = new ArrayList<>();
-                    if (!Objects.equals(s.getLanguage(), t.getLanguage())) {
-                        details.add("language: " + s.getLanguage() + " → " + t.getLanguage());
-                    }
-                    if (!Objects.equals(s.getDefinition(), t.getDefinition())) {
-                        details.add("definition changed");
-                    }
-                    return details;
-                });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Sequences
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private List<ObjectDiff> compareSequences(List<SequenceModel> sourceList, List<SequenceModel> targetList) {
-        Map<String, SequenceModel> srcMap = safeList(sourceList).stream()
-                .collect(Collectors.toMap(SequenceModel::getName, Function.identity()));
-        Map<String, SequenceModel> tgtMap = safeList(targetList).stream()
-                .collect(Collectors.toMap(SequenceModel::getName, Function.identity()));
-
-        return compareByName(srcMap, tgtMap,
-                s -> "type=" + s.getDataType() + " start=" + s.getStartValue() + " inc=" + s.getIncrement(),
-                (s, t) -> {
-                    List<String> details = new ArrayList<>();
-                    if (!Objects.equals(s.getDataType(), t.getDataType())) {
-                        details.add("dataType: " + s.getDataType() + " → " + t.getDataType());
-                    }
-                    if (!Objects.equals(s.getStartValue(), t.getStartValue())) {
-                        details.add("startValue: " + s.getStartValue() + " → " + t.getStartValue());
-                    }
-                    if (!Objects.equals(s.getIncrement(), t.getIncrement())) {
-                        details.add("increment: " + s.getIncrement() + " → " + t.getIncrement());
-                    }
-                    if (!Objects.equals(s.getMinValue(), t.getMinValue())) {
-                        details.add("minValue: " + s.getMinValue() + " → " + t.getMinValue());
-                    }
-                    if (!Objects.equals(s.getMaxValue(), t.getMaxValue())) {
-                        details.add("maxValue: " + s.getMaxValue() + " → " + t.getMaxValue());
-                    }
-                    if (s.isCyclic() != t.isCyclic()) {
-                        details.add("cyclic: " + s.isCyclic() + " → " + t.isCyclic());
-                    }
-                    return details;
-                });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Types
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private List<ObjectDiff> compareTypes(List<TypeModel> sourceList, List<TypeModel> targetList) {
-        Map<String, TypeModel> srcMap = safeList(sourceList).stream()
-                .collect(Collectors.toMap(TypeModel::getName, Function.identity()));
-        Map<String, TypeModel> tgtMap = safeList(targetList).stream()
-                .collect(Collectors.toMap(TypeModel::getName, Function.identity()));
-
-        return compareByName(srcMap, tgtMap,
-                TypeModel::getDefinition,
-                (s, t) -> {
-                    List<String> details = new ArrayList<>();
-                    if (!Objects.equals(s.getType(), t.getType())) {
-                        details.add("typeCategory: " + s.getType() + " → " + t.getType());
-                    }
-                    if (!Objects.equals(s.getDefinition(), t.getDefinition())) {
-                        details.add("definition changed");
-                    }
-                    return details;
-                });
-    }
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Views
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    private List<ObjectDiff> compareViews(List<ViewModel> sourceList, List<ViewModel> targetList) {
-        Map<String, ViewModel> srcMap = safeList(sourceList).stream()
-                .collect(Collectors.toMap(ViewModel::getName, Function.identity()));
-        Map<String, ViewModel> tgtMap = safeList(targetList).stream()
-                .collect(Collectors.toMap(ViewModel::getName, Function.identity()));
-
-        return compareByName(srcMap, tgtMap,
-                ViewModel::getDefinition,
-                (s, t) -> {
-                    List<String> details = new ArrayList<>();
-                    if (!Objects.equals(s.getDefinition(), t.getDefinition())) {
-                        details.add("definition changed");
-                    }
-                    return details;
-                });
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Generic compare-by-name helper
     // ═══════════════════════════════════════════════════════════════════════════
 
-    /**
-     * Generic helper that compares two maps of named objects and produces
-     * ObjectDiff entries.
-     *
-     * @param srcMap         source objects keyed by name
-     * @param tgtMap         target objects keyed by name
-     * @param toDefinition   converts an object to its "definition" string for
-     *                       display
-     * @param detailsBuilder given source + target, returns list of mismatch detail
-     *                       strings (empty if identical)
-     */
-    private <T> List<ObjectDiff> compareByName(
-            Map<String, T> srcMap,
-            Map<String, T> tgtMap,
-            Function<T, String> toDefinition,
-            java.util.function.BiFunction<T, T, List<String>> detailsBuilder) {
+    private <T> List<ObjectDiff> compareObjects(
+            List<T> sourceList,
+            List<T> targetList,
+            String objectType,
+            Function<T, String> nameExtractor,
+            Function<T, String> keyExtractor,
+            Function<T, String> defExtractor,
+            ComparisonSummary.ComparisonSummaryBuilder summaryBuilder) {
+
+        Map<String, T> srcMap = safeList(sourceList).stream().collect(Collectors.toMap(keyExtractor, Function.identity()));
+        Map<String, T> tgtMap = safeList(targetList).stream().collect(Collectors.toMap(keyExtractor, Function.identity()));
 
         List<ObjectDiff> diffs = new ArrayList<>();
+        Set<String> allKeys = new TreeSet<>();
+        allKeys.addAll(srcMap.keySet());
+        allKeys.addAll(tgtMap.keySet());
 
-        Set<String> allNames = new TreeSet<>();
-        allNames.addAll(srcMap.keySet());
-        allNames.addAll(tgtMap.keySet());
-
-        for (String name : allNames) {
-            T src = srcMap.get(name);
-            T tgt = tgtMap.get(name);
+        for (String key : allKeys) {
+            T src = srcMap.get(key);
+            T tgt = tgtMap.get(key);
+            String name = src != null ? nameExtractor.apply(src) : nameExtractor.apply(tgt);
 
             if (src != null && tgt == null) {
-                diffs.add(ObjectDiff.builder()
-                        .name(name).status(DiffStatus.MISSING_IN_TARGET)
-                        .sourceDefinition(toDefinition.apply(src)).targetDefinition(null)
-                        .mismatchDetails(Collections.emptyList()).build());
+                diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.MISSING_IN_TARGET).migrationOperation(MigrationOperation.CREATE_OBJECT).severity(ChangeSeverity.SAFE).sourceDefinition(defExtractor.apply(src)).mismatchDetails(Collections.emptyList()).build());
             } else if (src == null) {
-                diffs.add(ObjectDiff.builder()
-                        .name(name).status(DiffStatus.MISSING_IN_SOURCE)
-                        .sourceDefinition(null).targetDefinition(toDefinition.apply(tgt))
-                        .mismatchDetails(Collections.emptyList()).build());
+                diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.MISSING_IN_SOURCE).migrationOperation(MigrationOperation.DROP_OBJECT).severity(ChangeSeverity.DESTRUCTIVE).targetDefinition(defExtractor.apply(tgt)).mismatchDetails(Collections.emptyList()).build());
             } else {
-                List<String> details = detailsBuilder.apply(src, tgt);
-                DiffStatus status = details.isEmpty() ? DiffStatus.IDENTICAL : DiffStatus.DEFINITION_MISMATCH;
-                diffs.add(ObjectDiff.builder()
-                        .name(name).status(status)
-                        .sourceDefinition(toDefinition.apply(src))
-                        .targetDefinition(toDefinition.apply(tgt))
-                        .mismatchDetails(details).build());
+                String srcDef = defExtractor.apply(src);
+                String tgtDef = defExtractor.apply(tgt);
+                if (Objects.equals(srcDef, tgtDef)) {
+                    diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.IDENTICAL).migrationOperation(MigrationOperation.NONE).severity(ChangeSeverity.SAFE).sourceDefinition(srcDef).targetDefinition(tgtDef).mismatchDetails(Collections.emptyList()).build());
+                } else {
+                    diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.DEFINITION_MISMATCH).migrationOperation(MigrationOperation.ALTER_OBJECT).severity(ChangeSeverity.REVIEW).sourceDefinition(srcDef).targetDefinition(tgtDef).mismatchDetails(Collections.singletonList("definition changed")).build());
+                }
             }
         }
-
         return diffs;
     }
-
-    // ─── Utilities ────────────────────────────────────────────────────────────
-
-    private <T> List<T> safeList(List<T> list) {
-        return list != null ? list : Collections.emptyList();
+    
+    private PrimaryKeyDiff comparePrimaryKeys(List<String> sourcePks, List<String> targetPks) {
+        List<String> src = safeList(sourcePks);
+        List<String> tgt = safeList(targetPks);
+        if (src.isEmpty() && tgt.isEmpty()) return null;
+        if (src.equals(tgt)) return PrimaryKeyDiff.builder().status(DiffStatus.IDENTICAL).sourceColumns(src).targetColumns(tgt).build();
+        if (src.isEmpty()) return PrimaryKeyDiff.builder().status(DiffStatus.MISSING_IN_SOURCE).sourceColumns(src).targetColumns(tgt).build();
+        if (tgt.isEmpty()) return PrimaryKeyDiff.builder().status(DiffStatus.MISSING_IN_TARGET).sourceColumns(src).targetColumns(tgt).build();
+        return PrimaryKeyDiff.builder().status(DiffStatus.PRIMARY_KEY_MISMATCH).sourceColumns(src).targetColumns(tgt).build();
     }
 
-    private String nvl(String s) {
-        return s != null ? s : "(none)";
-    }
+    private <T> List<T> safeList(List<T> list) { return list != null ? list : Collections.emptyList(); }
+    private String nvl(String s) { return s != null ? s : "(none)"; }
 }

@@ -1,9 +1,19 @@
 package com.schemavault.app.dto.diff;
 
 public enum DiffStatus {
+
     IDENTICAL,
-    MISSING_IN_TARGET, // Present in source, missing in target
-    MISSING_IN_SOURCE, // Present in target, missing in source
-    TYPE_MISMATCH, // Both have it, but the data type differs
-    DEFINITION_MISMATCH // Both have it, but non-type attributes differ
+    MISSING_IN_TARGET,
+    MISSING_IN_SOURCE,
+    TYPE_MISMATCH,
+    LENGTH_MISMATCH,
+    PRECISION_MISMATCH,
+    SCALE_MISMATCH,
+    NULLABILITY_MISMATCH,
+    DEFAULT_MISMATCH,
+    PRIMARY_KEY_MISMATCH,
+    FOREIGN_KEY_MISMATCH,
+    INDEX_MISMATCH,
+    CONSTRAINT_MISMATCH,
+    DEFINITION_MISMATCH
 }
