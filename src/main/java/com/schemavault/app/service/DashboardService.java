@@ -5,6 +5,7 @@ import com.schemavault.app.dto.RecentCompareJobDto;
 import com.schemavault.app.entity.User;
 import com.schemavault.app.repository.CompareJobRepository;
 import com.schemavault.app.repository.DbConnectionRepository;
+import com.schemavault.app.repository.ProjectRepository;
 import com.schemavault.app.repository.TeamRepository;
 import com.schemavault.app.repository.UserRepository;
 import com.schemavault.app.service.security.CurrentUserService;
@@ -25,6 +26,7 @@ public class DashboardService {
     private final CompareJobRepository compareJobRepository;
     private final UserRepository userRepository;
     private final TeamRepository teamRepository;
+    private final ProjectRepository projectRepository;
 
     @Transactional(readOnly = true)
     public DashboardResponse getDashboardStats() {
@@ -82,9 +84,11 @@ public class DashboardService {
 
         long activeUsers = isSuperAdmin ? userRepository.count() : 0;
         long teams = isSuperAdmin ? teamRepository.count() : teamRepository.countAccessibleTeams(user.getId());
+        long projects = isSuperAdmin ? projectRepository.count() : projectRepository.countByCreatedById(user.getId());
         long systemAlerts = 0; // Static 0 for now as per plan
 
         return DashboardResponse.builder()
+                .projects(projects)
                 .activeConnections(activeConnections)
                 .schemasCompared(schemasCompared)
                 .systemAlerts(systemAlerts)

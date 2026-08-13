@@ -10,6 +10,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class DashboardResponse {
+    private long projects;
     private long activeConnections;
     private long schemasCompared;
     private long systemAlerts;

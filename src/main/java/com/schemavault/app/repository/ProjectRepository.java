@@ -19,6 +19,8 @@ public interface ProjectRepository extends JpaRepository<Project, Long> {
 
        boolean existsByName(String name);
 
+       long countByCreatedById(Long userId);
+
        @Query("SELECT new com.schemavault.app.dto.ProjectResponse(p.id, p.name, p.description, u.id, u.email, p.createdAt, p.updatedAt, CAST(COUNT(c.id) AS int)) "
                      +
                      "FROM Project p " +
