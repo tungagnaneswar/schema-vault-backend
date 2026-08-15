@@ -1,9 +1,10 @@
 package com.schemavault.app.service;
 
 import com.schemavault.app.dto.ProjectRequest;
-import com.schemavault.app.entity.User;
 import com.schemavault.app.entity.Role;
+import com.schemavault.app.entity.User;
 import com.schemavault.app.repository.ProjectRepository;
+import com.schemavault.app.repository.RoleRepository;
 import com.schemavault.app.repository.UserRepository;
 import com.schemavault.app.service.ProjectService;
 import com.schemavault.app.service.security.CurrentUserService;
@@ -28,14 +29,19 @@ public class ProjectServiceDebugTest {
     @Autowired
     private ProjectRepository projectRepository;
 
+    @Autowired
+    private UserRepository userRepository;
+
+    @Autowired
+    private RoleRepository roleRepository;
+
     @Test
     public void testCreateProject() {
-        User user = new User();
-        user.setId(1L);
-        user.setEmail("test@test.com");
-        Role role = new Role();
-        role.setName("SUPER_ADMIN");
-        user.setRole(role);
+        Role role = roleRepository.findByName("SUPER_ADMIN")
+                .orElseGet(() -> roleRepository.save(Role.builder().name("SUPER_ADMIN").build()));
+
+        String email = "test_" + System.currentTimeMillis() + "@test.com";
+        User user = userRepository.save(User.builder().email(email).password("pass").role(role).build());
 
         when(currentUserService.getCurrentUser()).thenReturn(user);
 

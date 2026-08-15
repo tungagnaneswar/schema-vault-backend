@@ -302,24 +302,35 @@ public class SchemaComparisonService {
             Function<T, String> defExtractor,
             ComparisonSummary.ComparisonSummaryBuilder summaryBuilder) {
 
-        Map<String, T> srcMap = safeList(sourceList).stream().collect(Collectors.toMap(keyExtractor, Function.identity()));
-        Map<String, T> tgtMap = safeList(targetList).stream().collect(Collectors.toMap(keyExtractor, Function.identity()));
+        List<T> safeSrc = safeList(sourceList);
+        List<T> safeTgt = safeList(targetList);
+
+        Map<String, T> srcMap = new LinkedHashMap<>();
+        for (T item : safeSrc) {
+            String k = keyExtractor.apply(item);
+            if (k != null) srcMap.putIfAbsent(k, item);
+        }
+
+        Map<String, T> tgtMap = new LinkedHashMap<>();
+        for (T item : safeTgt) {
+            String k = keyExtractor.apply(item);
+            if (k != null) tgtMap.putIfAbsent(k, item);
+        }
 
         List<ObjectDiff> diffs = new ArrayList<>();
         Set<String> allKeys = new TreeSet<>();
         allKeys.addAll(srcMap.keySet());
         allKeys.addAll(tgtMap.keySet());
 
+        List<T> unmatchedSrc = new ArrayList<>();
+        Map<String, T> unmatchedTgtByDef = new LinkedHashMap<>();
+
         for (String key : allKeys) {
             T src = srcMap.get(key);
             T tgt = tgtMap.get(key);
             String name = src != null ? nameExtractor.apply(src) : nameExtractor.apply(tgt);
 
-            if (src != null && tgt == null) {
-                diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.MISSING_IN_TARGET).migrationOperation(MigrationOperation.CREATE_OBJECT).severity(ChangeSeverity.SAFE).sourceDefinition(defExtractor.apply(src)).mismatchDetails(Collections.emptyList()).build());
-            } else if (src == null) {
-                diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.MISSING_IN_SOURCE).migrationOperation(MigrationOperation.DROP_OBJECT).severity(ChangeSeverity.DESTRUCTIVE).targetDefinition(defExtractor.apply(tgt)).mismatchDetails(Collections.emptyList()).build());
-            } else {
+            if (src != null && tgt != null) {
                 String srcDef = defExtractor.apply(src);
                 String tgtDef = defExtractor.apply(tgt);
                 if (Objects.equals(srcDef, tgtDef)) {
@@ -327,8 +338,35 @@ public class SchemaComparisonService {
                 } else {
                     diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.DEFINITION_MISMATCH).migrationOperation(MigrationOperation.ALTER_OBJECT).severity(ChangeSeverity.REVIEW).sourceDefinition(srcDef).targetDefinition(tgtDef).mismatchDetails(Collections.singletonList("definition changed")).build());
                 }
+            } else if (src != null) {
+                unmatchedSrc.add(src);
+            } else {
+                String def = defExtractor.apply(tgt);
+                if (def != null && !unmatchedTgtByDef.containsKey(def)) {
+                    unmatchedTgtByDef.put(def, tgt);
+                } else {
+                    diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.MISSING_IN_SOURCE).migrationOperation(MigrationOperation.DROP_OBJECT).severity(ChangeSeverity.DESTRUCTIVE).targetDefinition(def).mismatchDetails(Collections.emptyList()).build());
+                }
             }
         }
+
+        for (T src : unmatchedSrc) {
+            String srcDef = defExtractor.apply(src);
+            String name = nameExtractor.apply(src);
+            if (srcDef != null && unmatchedTgtByDef.containsKey(srcDef)) {
+                T tgt = unmatchedTgtByDef.remove(srcDef);
+                diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.IDENTICAL).migrationOperation(MigrationOperation.NONE).severity(ChangeSeverity.SAFE).sourceDefinition(srcDef).targetDefinition(srcDef).mismatchDetails(Collections.emptyList()).build());
+            } else {
+                diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.MISSING_IN_TARGET).migrationOperation(MigrationOperation.CREATE_OBJECT).severity(ChangeSeverity.SAFE).sourceDefinition(srcDef).mismatchDetails(Collections.emptyList()).build());
+            }
+        }
+
+        for (T tgt : unmatchedTgtByDef.values()) {
+            String name = nameExtractor.apply(tgt);
+            String tgtDef = defExtractor.apply(tgt);
+            diffs.add(ObjectDiff.builder().name(name).objectType(objectType).status(DiffStatus.MISSING_IN_SOURCE).migrationOperation(MigrationOperation.DROP_OBJECT).severity(ChangeSeverity.DESTRUCTIVE).targetDefinition(tgtDef).mismatchDetails(Collections.emptyList()).build());
+        }
+
         return diffs;
     }
     

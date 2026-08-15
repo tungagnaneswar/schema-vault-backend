@@ -183,6 +183,7 @@ public class PostgresSchemaExtractor implements SchemaExtractor {
                 "  AND tc.constraint_schema = cc.constraint_schema " +
                 "WHERE tc.table_schema " + schemaFilter + " " +
                 "  AND tc.constraint_type = 'CHECK' " +
+                "  AND cc.check_clause NOT LIKE '%IS NOT NULL%' " +
                 "ORDER BY tc.table_name, tc.constraint_name";
 
         try (Statement stmt = conn.createStatement(); ResultSet rs = stmt.executeQuery(checkSql)) {

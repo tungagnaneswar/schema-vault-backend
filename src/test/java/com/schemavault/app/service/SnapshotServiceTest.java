@@ -11,6 +11,7 @@ import com.schemavault.app.service.SnapshotService;
 import com.schemavault.app.service.extractor.SchemaExtractor;
 import com.schemavault.app.service.extractor.SchemaExtractorFactory;
 import com.schemavault.app.service.security.SecretManager;
+import com.schemavault.app.service.security.CurrentUserService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.mockito.InjectMocks;
@@ -37,6 +38,11 @@ class SnapshotServiceTest {
     private ObjectMapper objectMapper;
     @Mock
     private SchemaExtractor schemaExtractor;
+
+    @Mock
+    private DbConnectionService dbConnectionService;
+    @Mock
+    private CurrentUserService currentUserService;
 
     @InjectMocks
     private SnapshotService snapshotService;
