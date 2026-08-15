@@ -183,7 +183,6 @@ public class DbConnectionService {
 
     public String determinePermission(DbConnection connection, User user) {
         if (user.getRole().getName().equals("SUPER_ADMIN") ||
-                user.getRole().getName().equals("ADMIN") ||
                 connection.getCreatedBy().getId().equals(user.getId())) {
             return "ADMIN";
         }
